@@ -129,6 +129,86 @@ Usage is stored in the SQLite file configured by `server.usage_db` and survives
 restarts. The database path requires a process restart if changed; other settings
 can still be reloaded with `SIGHUP`.
 
+## Multiple backends and credentials
+
+Each entry under `providers` is an independent upstream configuration. A
+provider has its own base URL, credential environment variable, headers,
+autodiscovery settings, and rate/concurrency limits:
+
+```yaml
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+
+  local:
+    base_url: http://127.0.0.1:11434/v1
+    api_key_env: LOCAL_API_KEY
+
+  backup:
+    base_url: https://backup.example.com/v1
+    api_key_env: BACKUP_API_KEY
+```
+
+The environment variables contain the provider credentials. They are read by
+Shepard and sent only to the selected upstream provider; client credentials are
+never used as provider credentials.
+
+A model can target one provider:
+
+```yaml
+models:
+  fast:
+    provider: local
+    model: qwen-coder
+```
+
+Or it can define an ordered list of targets for retries and failover:
+
+```yaml
+models:
+  coding:
+    retries: 1
+    targets:
+      - provider: local
+        model: qwen-coder
+      - provider: openai
+        model: gpt-5-mini
+      - provider: backup
+        model: backup-coding-model
+```
+
+Shepard retries transient transport and server failures on the current target,
+then advances through the remaining targets when failover is possible. A
+`404` or `429` moves directly to the next target. Clients continue to request
+the stable alias `coding`; they do not need to know which backend handled the
+request.
+
+The same backend can be configured more than once when separate API keys or
+limits are needed:
+
+```yaml
+providers:
+  account_a:
+    base_url: https://api.example.com/v1
+    api_key_env: ACCOUNT_A_KEY
+
+  account_b:
+    base_url: https://api.example.com/v1
+    api_key_env: ACCOUNT_B_KEY
+
+models:
+  shared-service:
+    targets:
+      - provider: account_a
+        model: shared-model
+      - provider: account_b
+        model: shared-model
+```
+
+This provides explicit ordered failover between keys. Shepard does not yet
+perform automatic least-loaded key pooling or key rotation within one provider.
+
 ## Backend model discovery
 
 An OpenAI-compatible backend can publish its models through `GET /v1/models`:
