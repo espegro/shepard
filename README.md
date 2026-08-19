@@ -1,8 +1,57 @@
 # Shepard
 
-Shepard is a small OpenAI-compatible LLM gateway written in Go. Clients use stable
-model aliases while Shepard selects the provider, supplies its credential, rewrites
-the upstream model name, and optionally extends the system prompt.
+Shepard is a small, self-hosted OpenAI-compatible gateway for routing LLM
+requests to one or more backends. It gives clients one stable endpoint and
+stable model names while the operator keeps provider credentials, backend
+model IDs, failover policy, and capacity controls on the server.
+
+## What Shepard solves
+
+Running several LLM backends normally forces every client to know provider-
+specific URLs, model names, credentials, and failure behavior. Shepard puts
+that operational complexity behind one API:
+
+- Clients call a stable alias such as `coding_model` instead of a vendor model ID.
+- Providers can be changed or reordered without changing client configuration.
+- Credentials stay in the gateway environment instead of being sent by clients.
+- Requests can fail over from a local backend to a remote provider.
+- OpenCode and other OpenAI-compatible clients can use the same endpoint.
+- Operators get authentication, network ACLs, limits, queueing, readiness, metrics,
+  usage accounting, and structured logs in one small service.
+
+## Features
+
+- OpenAI-compatible `chat/completions` and `responses` APIs, including streaming
+- Stable model aliases with optional system-prompt prepend/append
+- Multiple providers with ordered targets, retries, and failover
+- Backend model autodiscovery through `/v1/models`, with collision-safe prefixes
+- Provider API keys from environment variables and custom upstream headers
+- Per-client, per-model, and per-provider request-rate and concurrency limits
+- Small bounded queue for short overload bursts, with timeout-aware rejection
+- Optional IPv4/IPv6 client ACLs using single addresses or CIDR ranges
+- Optional trusted-proxy handling for `X-Forwarded-For`
+- Separate liveness (`/healthz`) and provider readiness (`/readyz`) endpoints
+- Prometheus-compatible metrics and SQLite-backed usage totals
+- Optional redacted request/response logging with bounded body capture
+- Generated OpenCode configuration at `/opencode.json`
+- Atomic configuration reload with `SIGHUP`
+- systemd installer and operating documentation for RHEL 9+ and Ubuntu 24.04+
+
+## Request flow
+
+```text
+Client
+  -> auth and network ACL
+  -> stable model alias
+  -> client/model limits and bounded queue
+  -> provider target selection, retry, and failover
+  -> OpenAI-compatible backend
+```
+
+Shepard forwards the request body, rewrites only the configured model alias,
+adds configured system-prompt text when requested, and streams the selected
+provider response back to the client. It does not permanently disable a
+backend based on a single transient failure; failover is request-scoped.
 
 ## Quick start
 
