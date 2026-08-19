@@ -48,3 +48,24 @@ models:
 		t.Fatalf("expected unknown-field error, got %v", err)
 	}
 }
+
+func TestRejectsStructuralModelOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "invalid-override.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  test:
+    base_url: http://localhost:9999/v1
+models:
+  stable:
+    provider: test
+    model: real-model
+    overrides:
+      messages: []
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "override cannot set") {
+		t.Fatalf("expected structural override error, got %v", err)
+	}
+}

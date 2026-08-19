@@ -209,6 +209,36 @@ models:
 This provides explicit ordered failover between keys. Shepard does not yet
 perform automatic least-loaded key pooling or key rotation within one provider.
 
+## Model request overrides
+
+Models can apply server-side request fields consistently, regardless of which
+client or target handles the request:
+
+```yaml
+models:
+  coding:
+    provider: openai
+    model: gpt-5-mini
+    overrides:
+      temperature: 0.2
+      top_p: 0.9
+      max_output_tokens: 8192
+      reasoning:
+        effort: medium
+```
+
+Overrides are applied after the client request and therefore take precedence.
+This is useful for keeping coding models deterministic, setting output limits,
+or enabling a provider's reasoning/thinking mode. Common fields such as
+`temperature`, `top_p`, `max_tokens`, `max_output_tokens`, `stop`, `seed`,
+`frequency_penalty`, `presence_penalty`, `reasoning`, and `thinking` can be
+passed through. Shepard does not translate provider-specific reasoning fields;
+the configured shape is sent to the selected backend.
+
+Structural fields such as `model`, `messages`, `input`, and `instructions` are
+protected and cannot be replaced through `overrides`. Client fields not listed
+in `overrides` continue to pass through unchanged.
+
 ## Backend model discovery
 
 An OpenAI-compatible backend can publish its models through `GET /v1/models`:

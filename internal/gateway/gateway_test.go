@@ -36,6 +36,13 @@ func TestChatAliasCredentialPromptAndUsage(t *testing.T) {
 	})
 
 	cfg := testConfig("http://provider.invalid/v1")
+	model := cfg.Models["stable"]
+	model.Overrides = map[string]any{
+		"temperature":       0.2,
+		"max_output_tokens": 128,
+		"reasoning":         map[string]any{"effort": "low"},
+	}
+	cfg.Models["stable"] = model
 	cfg.Server.InboundAPIKeys = []string{"client-secret"}
 	g := mustGateway(t, cfg)
 	g.client.Transport = transport
@@ -50,6 +57,12 @@ func TestChatAliasCredentialPromptAndUsage(t *testing.T) {
 	}
 	if received["model"] != "provider-model" {
 		t.Fatalf("model was not rewritten: %#v", received["model"])
+	}
+	if received["temperature"] != 0.2 || received["max_output_tokens"] != float64(128) {
+		t.Fatalf("model overrides were not applied: %#v", received)
+	}
+	if reasoning, ok := received["reasoning"].(map[string]any); !ok || reasoning["effort"] != "low" {
+		t.Fatalf("reasoning override was not applied: %#v", received["reasoning"])
 	}
 	messages := received["messages"].([]any)
 	system := messages[0].(map[string]any)["content"]

@@ -36,5 +36,9 @@ models:
   coding:
     provider: local
     model: qwen2.5-coder:32b
+    overrides:
+      temperature: 0.2
+      max_tokens: 4096
+      thinking: false
     # Retry transient failures once before returning an error.
     retries: 1

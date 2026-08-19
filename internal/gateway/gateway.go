@@ -317,6 +317,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 		writeAPIError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	applyRequestOverrides(payload, model.Overrides)
 	var resp *http.Response
 	var selected config.TargetConfig
 	var releaseProvider func()
@@ -429,6 +430,12 @@ targetLoop:
 	g.logger.Info("request complete", "model", alias, "provider", selected.Provider, "upstream_model", selected.Model, "status", resp.StatusCode, "duration_ms", time.Since(started).Milliseconds(), "remote_addr", r.RemoteAddr, "client_addr", clientIPString(forwardedClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), g.trusted.Load())), "x_forwarded_for", r.Header.Get("X-Forwarded-For"))
 	if copyErr != nil {
 		g.logger.Error("stream provider response", "model", alias, "error", copyErr)
+	}
+}
+
+func applyRequestOverrides(payload map[string]any, overrides map[string]any) {
+	for key, value := range overrides {
+		payload[key] = value
 	}
 }
 

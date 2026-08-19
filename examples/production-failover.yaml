@@ -71,6 +71,11 @@ models:
   # current target, then moves to the next target when failover is possible.
   coding:
     retries: 1
+    overrides:
+      temperature: 0.2
+      max_output_tokens: 8192
+      reasoning:
+        effort: medium
     limits:
       # This model-level limit is shared across both targets and all clients.
       requests_per_minute: 60

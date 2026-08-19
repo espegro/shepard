@@ -80,6 +80,7 @@ type ModelConfig struct {
 	Targets             []TargetConfig `yaml:"targets"`
 	Retries             int            `yaml:"retries"`
 	Limits              Limits         `yaml:"limits"`
+	Overrides           map[string]any `yaml:"overrides"`
 	PrependSystemPrompt string         `yaml:"prepend_system_prompt"`
 	AppendSystemPrompt  string         `yaml:"append_system_prompt"`
 }
@@ -248,6 +249,12 @@ func (c *Config) Validate() error {
 		}
 		if m.Retries < 0 || m.Retries > 10 {
 			return fmt.Errorf("model %q retries must be between 0 and 10", alias)
+		}
+		for key := range m.Overrides {
+			switch key {
+			case "model", "messages", "input", "instructions":
+				return fmt.Errorf("model %q override cannot set %q", alias, key)
+			}
 		}
 		if err := m.Limits.validate("model " + alias); err != nil {
 			return err
