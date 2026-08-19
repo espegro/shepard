@@ -20,6 +20,7 @@ Shepard is a working OpenAI-compatible LLM gateway with:
 - Request and upstream timeouts, including a bounded request-body read window
 - systemd installation documentation and an installer for RHEL 9+ and Ubuntu 24.04+
 - Readable example configurations for minimal, local autodiscovery, and production failover deployments
+- Architecture and design rationale in [`docs/design.md`](docs/design.md)
 
 The test suite passes with the race detector:
 

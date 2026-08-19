@@ -35,7 +35,10 @@ that operational complexity behind one API:
 - Optional redacted request/response logging with bounded body capture
 - Generated OpenCode configuration at `/opencode.json`
 - Atomic configuration reload with `SIGHUP`
-- systemd installer and operating documentation for RHEL 9+ and Ubuntu 24.04+
+  - systemd installer and operating documentation for RHEL 9+ and Ubuntu 24.04+
+
+The main design decisions and trade-offs are documented in
+[docs/design.md](docs/design.md).
 
 ## Request flow
 
