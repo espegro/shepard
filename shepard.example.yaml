@@ -1,0 +1,73 @@
+server:
+  listen: ":8080"
+  # Empty or omitted means no authentication on the gateway.
+  inbound_api_keys: []
+  usage_db: shepard-usage.db
+  request_timeout: 10m
+  read_timeout: 30s
+  max_request_bytes: 8388608
+  queue:
+    enabled: true
+    max_size: 32
+    wait_timeout: 30s
+  # Optional full request/response logging. Keep disabled unless debugging;
+  # bodies can contain prompts and generated content.
+  logging:
+    enabled: false
+    requests: true
+    responses: true
+    include_bodies: true
+    max_body_bytes: 65536
+  client_limits:
+    requests_per_minute: 120
+    burst: 10
+    max_concurrent: 4
+
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    limits:
+      requests_per_minute: 600
+      burst: 20
+      max_concurrent: 16
+
+  local:
+    base_url: http://127.0.0.1:11434/v1
+    autodiscover:
+      enabled: true
+      prefix: "local/"
+      cache_ttl: 1m
+    limits:
+      requests_per_minute: 60
+      burst: 5
+      max_concurrent: 2
+
+models:
+  coding_model:
+    retries: 1
+    limits:
+      requests_per_minute: 30
+      burst: 3
+      max_concurrent: 2
+    targets:
+      - provider: local
+        model: qwen3.8:27b
+      - provider: openai
+        model: gpt-5-mini
+
+  smart:
+    provider: openai
+    model: gpt-5
+    prepend_system_prompt: |
+      Follow the organisation's security policy.
+
+  fast:
+    provider: local
+    model: qwen3:8b
+
+  support-bot:
+    provider: openai
+    model: gpt-5-mini
+    append_system_prompt: |
+      Answer in Norwegian unless the user asks for another language.

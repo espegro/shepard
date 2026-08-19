@@ -1,0 +1,36 @@
+server:
+  listen: ":8080"
+  inbound_api_keys: []
+  usage_db: shepard-test-usage.db
+  request_timeout: 10m
+  client_limits:
+    requests_per_minute: 60
+    burst: 5
+    max_concurrent: 2
+
+providers:
+  local:
+    base_url: http://127.0.0.1:10000/v1
+    autodiscover:
+      enabled: true
+      prefix: "local/"
+      cache_ttl: 30s
+    limits:
+      requests_per_minute: 60
+      burst: 5
+      max_concurrent: 2
+
+# Models from the backend are also exposed as local/<backend-model-name>.
+# Static meta-models take priority and keep the client-facing name stable.
+models:
+  coding_model:
+    retries: 1
+    limits:
+      requests_per_minute: 30
+      burst: 3
+      max_concurrent: 1
+    targets:
+      - provider: local
+        model: qwen3.8:27b
+      - provider: local
+        model: qwen3-coder-next:latest

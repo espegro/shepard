@@ -1,0 +1,31 @@
+# Minimal single-provider setup.
+#
+# This is a good starting point for a workstation or a small private service.
+# Binding to 127.0.0.1 keeps the gateway local to this machine. If another
+# machine must access it, bind to an appropriate interface and configure
+# inbound_api_keys before exposing the port.
+server:
+  listen: "127.0.0.1:8080"
+  # An empty list disables client authentication. Do not use this on a shared
+  # network unless access is protected by a trusted reverse proxy or firewall.
+  inbound_api_keys: []
+  # Optional network allowlist. Single IPv4/IPv6 addresses and CIDR ranges are
+  # accepted. Leave empty to allow every TCP peer that passes authentication.
+  client_networks: []
+  # Use an absolute path when running under systemd. Relative paths are placed
+  # in the service working directory.
+  usage_db: /var/lib/shepard/shepard-usage.db
+
+providers:
+  openai:
+    # Shepard appends /chat/completions, /responses, and /models to this URL.
+    base_url: https://api.openai.com/v1
+    # The value of this environment variable is sent to the provider as a
+    # bearer token. Keep the secret out of this file.
+    api_key_env: OPENAI_API_KEY
+
+models:
+  # Clients call this stable alias. Shepard forwards the request as gpt-5-mini.
+  smart:
+    provider: openai
+    model: gpt-5-mini

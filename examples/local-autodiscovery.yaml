@@ -1,0 +1,40 @@
+# Local OpenAI-compatible backend, such as Ollama or another local server.
+#
+# The backend must expose an OpenAI-compatible /v1 API. Shepard does not need
+# to know every model name in advance: autodiscovery reads /v1/models and
+# exposes each result as local/<model-id>.
+server:
+  listen: "127.0.0.1:8080"
+  # This is safe for a local-only setup. Add bearer keys before sharing it.
+  inbound_api_keys: []
+  usage_db: /var/lib/shepard/shepard-usage.db
+  # A small queue absorbs short bursts without allowing unbounded memory use.
+  # Requests that wait longer than this receive 429.
+  queue:
+    enabled: true
+    max_size: 8
+    wait_timeout: 20s
+
+providers:
+  local:
+    # Ollama commonly listens on 11434; adjust this for your backend.
+    base_url: http://127.0.0.1:11434/v1
+    autodiscover:
+      enabled: true
+      # Prefixes avoid collisions if more providers are added later.
+      prefix: "local/"
+      # Model lists are cached, so normal requests do not query the backend
+      # for every call.
+      cache_ttl: 1m
+    limits:
+      # Limit concurrent generations so the local machine remains responsive.
+      max_concurrent: 2
+
+models:
+  # This stable alias is useful for scripts and clients that should not depend
+  # on a vendor-specific model ID. The model must exist on the local backend.
+  coding:
+    provider: local
+    model: qwen2.5-coder:32b
+    # Retry transient failures once before returning an error.
+    retries: 1

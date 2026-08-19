@@ -1,0 +1,88 @@
+# Example production-oriented setup with client authentication and failover.
+#
+# Before using this file:
+#   1. Replace the example inbound key with a long random value.
+#   2. Export OPENAI_API_KEY and BACKUP_API_KEY (or put them in the systemd
+#      environment file).
+#   3. Replace the backup URL and model ID with a real service.
+server:
+  listen: ":8080"
+  # These are credentials presented by callers to Shepard, not provider keys.
+  # Shepard compares bearer tokens exactly and never forwards them upstream.
+  inbound_api_keys:
+    - replace-with-a-long-client-key
+  # Optional defense-in-depth allowlist. Do not add a proxy address here unless
+  # the proxy is the only intended network entry point.
+  # client_networks:
+  #   - 10.20.0.0/16
+  #   - 2001:db8:1234::/48
+  # If a reverse proxy is used, list only its network here before trusting
+  # X-Forwarded-For for client ACL decisions.
+  # trusted_proxy_networks:
+  #   - 127.0.0.1/32
+  usage_db: /var/lib/shepard/shepard-usage.db
+  # Protects against clients that send a request body too slowly.
+  read_timeout: 30s
+  # Covers provider work, retries, failover, and queue waiting.
+  request_timeout: 10m
+  max_request_bytes: 8388608
+  queue:
+    enabled: true
+    # Keep this bounded. A queue is backpressure, not a replacement for
+    # capacity planning.
+    max_size: 32
+    wait_timeout: 30s
+  client_limits:
+    # These limits apply independently to each inbound API key.
+    requests_per_minute: 120
+    burst: 10
+    max_concurrent: 8
+
+  # Disabled by default because request/response bodies may contain sensitive
+  # prompts and generated content. Enable explicitly for short-lived debugging.
+  logging:
+    enabled: false
+    requests: true
+    responses: true
+    include_bodies: true
+    max_body_bytes: 65536
+
+providers:
+  primary:
+    base_url: https://api.openai.com/v1
+    # Provider credentials are selected by environment variable name.
+    api_key_env: OPENAI_API_KEY
+    limits:
+      # Shared by all clients using this provider.
+      requests_per_minute: 600
+      burst: 20
+      max_concurrent: 16
+
+  backup:
+    base_url: https://backup.example.com/v1
+    api_key_env: BACKUP_API_KEY
+    limits:
+      requests_per_minute: 120
+      burst: 10
+      max_concurrent: 8
+
+models:
+  # Targets are tried in order. Shepard retries transient failures on the
+  # current target, then moves to the next target when failover is possible.
+  coding:
+    retries: 1
+    limits:
+      # This model-level limit is shared across both targets and all clients.
+      requests_per_minute: 60
+      burst: 5
+      max_concurrent: 4
+    targets:
+      - provider: primary
+        model: gpt-5-mini
+      - provider: backup
+        model: backup-coding-model
+
+  # A single-target alias is simpler when failover is not needed.
+  fast:
+    provider: primary
+    model: gpt-5-mini
