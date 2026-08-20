@@ -95,8 +95,10 @@ autodiscovery provider is down.
 Model-level `overrides` are applied after client fields, so configured policy
 wins over client-provided values. Structural fields (`model`, `messages`,
 `input`, and `instructions`) are protected. Provider-specific fields such as
-`reasoning` or `thinking` are passed through without pretending that every
-backend uses the same schema.
+`reasoning` or `thinking` are passed through where possible, with protocol
+adapters normalizing known differences. In particular, Ollama's OpenAI-
+compatible `/v1` endpoint uses `reasoning_effort` (where `none` disables
+thinking), while its native `/api` endpoint uses `think`.
 
 Prompt prepend/append behavior is implemented separately because it must handle
 Chat Completions messages and Responses instructions differently.

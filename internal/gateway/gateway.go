@@ -464,8 +464,37 @@ func clonePayload(payload map[string]any) map[string]any {
 func applyProviderCompatibility(payload map[string]any, endpoint, protocol string) {
 	if protocol == "ollama" {
 		if value, ok := payload["thinking"]; ok {
-			payload["think"] = value
+			// Ollama's OpenAI-compatible /v1 endpoint uses
+			// reasoning_effort, while the native /api endpoints use think.
+			// A boolean is mapped to the closest OpenAI-compatible value.
+			if _, exists := payload["reasoning_effort"]; !exists {
+				switch v := value.(type) {
+				case bool:
+					if v {
+						payload["reasoning_effort"] = "medium"
+					} else {
+						payload["reasoning_effort"] = "none"
+					}
+				case string:
+					payload["reasoning_effort"] = v
+				}
+			}
 			delete(payload, "thinking")
+		}
+		if value, ok := payload["think"]; ok {
+			if _, exists := payload["reasoning_effort"]; !exists {
+				switch v := value.(type) {
+				case bool:
+					if v {
+						payload["reasoning_effort"] = "medium"
+					} else {
+						payload["reasoning_effort"] = "none"
+					}
+				case string:
+					payload["reasoning_effort"] = v
+				}
+			}
+			delete(payload, "think")
 		}
 	}
 	if endpoint == "/v1/responses" {

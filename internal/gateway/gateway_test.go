@@ -372,11 +372,24 @@ func TestProviderTimeoutFailsOver(t *testing.T) {
 func TestProviderCompatibility(t *testing.T) {
 	payload := map[string]any{"thinking": false, "max_tokens": float64(128)}
 	applyProviderCompatibility(payload, "/v1/chat/completions", "ollama")
-	if payload["think"] != false {
-		t.Fatalf("ollama thinking override was not translated: %#v", payload)
+	if payload["reasoning_effort"] != "none" {
+		t.Fatalf("ollama thinking override was not translated to reasoning_effort=none: %#v", payload)
 	}
 	if _, exists := payload["thinking"]; exists {
 		t.Fatalf("ollama thinking field was not removed: %#v", payload)
+	}
+	if _, exists := payload["think"]; exists {
+		t.Fatalf("native Ollama think field leaked into /v1 request: %#v", payload)
+	}
+	withReasoning := map[string]any{"thinking": false, "reasoning_effort": "high"}
+	applyProviderCompatibility(withReasoning, "/v1/chat/completions", "ollama")
+	if withReasoning["reasoning_effort"] != "high" {
+		t.Fatalf("explicit reasoning_effort should win: %#v", withReasoning)
+	}
+	think := map[string]any{"think": true}
+	applyProviderCompatibility(think, "/v1/chat/completions", "ollama")
+	if think["reasoning_effort"] != "medium" {
+		t.Fatalf("think=true was not translated: %#v", think)
 	}
 	responses := map[string]any{"max_tokens": float64(128)}
 	applyProviderCompatibility(responses, "/v1/responses", "openai")

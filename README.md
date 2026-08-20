@@ -190,8 +190,10 @@ Shepard and sent only to the selected upstream provider; client credentials are
 never used as provider credentials.
 
 `protocol` defaults to `openai`. Set it to `ollama` for Ollama-compatible
-providers so Shepard can translate fields such as `thinking` to Ollama's
-`think` option. `request_timeout` is an optional per-provider deadline; when a
+providers so Shepard can translate reasoning controls to Ollama's OpenAI
+compatibility fields (for example, `thinking: false` becomes
+`reasoning_effort: "none"`; the native `think` field is not used on `/v1`).
+`request_timeout` is an optional per-provider deadline; when a
 provider exceeds it, Shepard can fail over to the next target instead of
 waiting for the global request timeout.
 
@@ -273,8 +275,8 @@ This is useful for keeping coding models deterministic, setting output limits,
 or enabling a provider's reasoning/thinking mode. Common fields such as
 `temperature`, `top_p`, `max_tokens`, `max_output_tokens`, `stop`, `seed`,
 `frequency_penalty`, `presence_penalty`, `reasoning`, and `thinking` can be
-passed through. Shepard does not translate provider-specific reasoning fields;
-the configured shape is sent to the selected backend.
+passed through. For Ollama `/v1` providers, `thinking`/`think` are normalized
+to `reasoning_effort`; explicit `reasoning_effort` takes precedence.
 
 Structural fields such as `model`, `messages`, `input`, and `instructions` are
 protected and cannot be replaced through `overrides`. Client fields not listed
