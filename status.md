@@ -15,6 +15,7 @@ Shepard is a working OpenAI-compatible LLM gateway with:
 - Optional trusted-proxy handling for `X-Forwarded-For` with basic network-aware request logs
 - Model-level request overrides for generation and reasoning parameters
 - OpenCode configuration generation at `/opencode.json`
+- Pass-through support for OpenAI-compatible multimodal image inputs
 - SQLite-backed usage accounting
 - Configuration reload through `SIGHUP`
 - Request and upstream timeouts, including a bounded request-body read window

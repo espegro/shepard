@@ -56,6 +56,36 @@ adds configured system-prompt text when requested, and streams the selected
 provider response back to the client. It does not permanently disable a
 backend based on a single transient failure; failover is request-scoped.
 
+## Image inputs
+
+OpenAI-compatible multimodal requests are passed through to providers without
+rewriting their content blocks. A client can send an image as a remote URL or
+as a base64 data URL:
+
+```json
+{
+  "model": "vision_model",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Describe this image."},
+        {
+          "type": "image_url",
+          "image_url": {"url": "data:image/jpeg;base64,..."}
+        }
+      ]
+    }
+  ]
+}
+```
+
+The selected backend must support vision and the request must fit within
+`server.max_request_bytes` (8 MiB by default). Increase that limit for larger
+base64 images. Shepard does not download or inspect remote image URLs. Image
+capability is provider/model-specific; autodiscovery exposes the model, but it
+does not guarantee that every model accepts images.
+
 ## Quick start
 
 ```sh

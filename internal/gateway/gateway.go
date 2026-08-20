@@ -538,7 +538,10 @@ func applySystemPrompt(payload map[string]any, endpoint, prepend, append string)
 		}
 		content, ok := message["content"].(string)
 		if !ok {
-			return errors.New("system prompt additions require string system content")
+			// Multimodal system content is valid for OpenAI-compatible APIs.
+			// Keep it intact and add the configured text as a separate system
+			// message below instead of rejecting the whole request.
+			continue
 		}
 		message["content"] = joinPrompt(prepend, content, append)
 		payload["messages"] = messages

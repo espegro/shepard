@@ -207,6 +207,42 @@ func TestResponsesInstructions(t *testing.T) {
 	}
 }
 
+func TestMultimodalImageContentPassesThrough(t *testing.T) {
+	t.Setenv("TEST_PROVIDER_KEY", "provider-secret")
+	var received map[string]any
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		return jsonResponse(r, `{"choices":[{"message":{"role":"assistant","content":"image received"}}]}`), nil
+	})
+	cfg := testConfig("http://provider.invalid/v1")
+	model := cfg.Models["stable"]
+	model.PrependSystemPrompt = "describe the image"
+	model.AppendSystemPrompt = "be concise"
+	cfg.Models["stable"] = model
+	g := mustGateway(t, cfg)
+	g.client.Transport = transport
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"stable","messages":[{"role":"system","content":[{"type":"text","text":"system context"}]},{"role":"user","content":[{"type":"text","text":"What is shown?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	g.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("unexpected response: %d %s", response.Code, response.Body.String())
+	}
+	messages := received["messages"].([]any)
+	user := messages[len(messages)-1].(map[string]any)
+	content := user["content"].([]any)
+	image := content[1].(map[string]any)
+	if image["type"] != "image_url" {
+		t.Fatalf("image content was not preserved: %#v", image)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("expected original multimodal system message plus configured system message and user message, got %d", len(messages))
+	}
+}
+
 func TestAutodiscoveryListsAndRoutesModels(t *testing.T) {
 	t.Setenv("TEST_PROVIDER_KEY", "provider-secret")
 	discoveryRequests := 0
