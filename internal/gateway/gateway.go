@@ -328,8 +328,10 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 targetLoop:
 	for targetIndex, candidate := range targets {
 		provider := cfg.Providers[candidate.Provider]
-		payload["model"] = candidate.Model
-		requestBody, marshalErr := json.Marshal(payload)
+		targetPayload := clonePayload(payload)
+		targetPayload["model"] = candidate.Model
+		applyProviderCompatibility(targetPayload, r.URL.Path, provider.Protocol)
+		requestBody, marshalErr := json.Marshal(targetPayload)
 		if marshalErr != nil {
 			writeAPIError(w, http.StatusInternalServerError, "could not encode upstream request")
 			return
@@ -347,7 +349,16 @@ targetLoop:
 				continue targetLoop
 			}
 			attemptStarted := time.Now()
-			candidateResp, requestErr := g.doUpstreamRequest(ctx, r, provider, requestBody)
+			attemptCtx := ctx
+			var cancelAttempt context.CancelFunc
+			if provider.RequestTimeout.Duration > 0 {
+				attemptCtx, cancelAttempt = context.WithTimeout(ctx, provider.RequestTimeout.Duration)
+			}
+			candidateResp, requestErr := g.doUpstreamRequest(attemptCtx, r, provider, requestBody)
+			attemptTimedOut := errors.Is(attemptCtx.Err(), context.DeadlineExceeded)
+			if cancelAttempt != nil {
+				cancelAttempt()
+			}
 			g.metrics.upstreamRequests.Add(1)
 			if requestErr != nil {
 				g.metrics.upstreamErrors.Add(1)
@@ -356,6 +367,9 @@ targetLoop:
 				g.logger.Warn("provider attempt failed", "model", alias, "provider", candidate.Provider, "upstream_model", candidate.Model, "attempt", attempt+1, "error", requestErr)
 				if ctx.Err() != nil {
 					break targetLoop
+				}
+				if provider.RequestTimeout.Duration > 0 && attemptTimedOut {
+					continue targetLoop
 				}
 				if attempt < model.Retries {
 					if !waitForRetry(ctx, attempt) {
@@ -436,6 +450,31 @@ targetLoop:
 func applyRequestOverrides(payload map[string]any, overrides map[string]any) {
 	for key, value := range overrides {
 		payload[key] = value
+	}
+}
+
+func clonePayload(payload map[string]any) map[string]any {
+	clone := make(map[string]any, len(payload))
+	for key, value := range payload {
+		clone[key] = value
+	}
+	return clone
+}
+
+func applyProviderCompatibility(payload map[string]any, endpoint, protocol string) {
+	if protocol == "ollama" {
+		if value, ok := payload["thinking"]; ok {
+			payload["think"] = value
+			delete(payload, "thinking")
+		}
+	}
+	if endpoint == "/v1/responses" {
+		if value, ok := payload["max_tokens"]; ok {
+			if _, exists := payload["max_output_tokens"]; !exists {
+				payload["max_output_tokens"] = value
+			}
+			delete(payload, "max_tokens")
+		}
 	}
 }
 

@@ -73,6 +73,12 @@ headers, or limits are required. Automatic least-loaded key pooling is not
 currently implemented; explicit provider entries and target order are used
 instead.
 
+Providers may declare a protocol (`openai` by default or `ollama`) and an
+optional per-provider request timeout. Protocol adapters make small
+provider-specific field translations, such as Ollama's `think` option. A
+provider timeout bounds an individual attempt and allows ordered failover when
+one backend is slow; the global server timeout still bounds the whole request.
+
 ## Model discovery and aliases
 
 Autodiscovery calls a provider's `/v1/models` endpoint and caches the result for

@@ -339,6 +339,52 @@ func TestFailoverUsesNextTarget(t *testing.T) {
 	}
 }
 
+func TestProviderTimeoutFailsOver(t *testing.T) {
+	var hosts []string
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		hosts = append(hosts, r.URL.Host)
+		if r.URL.Host == "slow.invalid" {
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		}
+		return jsonResponse(r, `{"usage":{"total_tokens":1}}`), nil
+	})
+	cfg := testConfig("http://unused.invalid/v1")
+	cfg.Providers = map[string]config.ProviderConfig{
+		"slow":   {BaseURL: "http://slow.invalid/v1", RequestTimeout: config.Duration{Duration: 10 * time.Millisecond}},
+		"second": {BaseURL: "http://second.invalid/v1"},
+	}
+	cfg.Models["stable"] = config.ModelConfig{Targets: []config.TargetConfig{
+		{Provider: "slow", Model: "model-a"},
+		{Provider: "second", Model: "model-b"},
+	}}
+	g := mustGateway(t, cfg)
+	g.client.Transport = transport
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"stable","messages":[]}`))
+	response := httptest.NewRecorder()
+	g.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || strings.Join(hosts, ",") != "slow.invalid,second.invalid" {
+		t.Fatalf("provider timeout did not fail over: status=%d hosts=%v body=%s", response.Code, hosts, response.Body.String())
+	}
+}
+
+func TestProviderCompatibility(t *testing.T) {
+	payload := map[string]any{"thinking": false, "max_tokens": float64(128)}
+	applyProviderCompatibility(payload, "/v1/chat/completions", "ollama")
+	if payload["think"] != false {
+		t.Fatalf("ollama thinking override was not translated: %#v", payload)
+	}
+	if _, exists := payload["thinking"]; exists {
+		t.Fatalf("ollama thinking field was not removed: %#v", payload)
+	}
+	responses := map[string]any{"max_tokens": float64(128)}
+	applyProviderCompatibility(responses, "/v1/responses", "openai")
+	if responses["max_output_tokens"] != float64(128) {
+		t.Fatalf("responses token override was not translated: %#v", responses)
+	}
+}
+
 func TestRetryAfterTransportFailure(t *testing.T) {
 	t.Setenv("TEST_PROVIDER_KEY", "provider-secret")
 	attempts := 0

@@ -19,6 +19,7 @@ providers:
   local:
     # Ollama commonly listens on 11434; adjust this for your backend.
     base_url: http://127.0.0.1:11434/v1
+    protocol: ollama
     autodiscover:
       enabled: true
       # Prefixes avoid collisions if more providers are added later.

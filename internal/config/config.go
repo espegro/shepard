@@ -61,11 +61,13 @@ type LoggingConfig struct {
 }
 
 type ProviderConfig struct {
-	BaseURL      string             `yaml:"base_url"`
-	APIKeyEnv    string             `yaml:"api_key_env"`
-	Headers      map[string]string  `yaml:"headers"`
-	Autodiscover AutodiscoverConfig `yaml:"autodiscover"`
-	Limits       Limits             `yaml:"limits"`
+	BaseURL        string             `yaml:"base_url"`
+	Protocol       string             `yaml:"protocol"`
+	APIKeyEnv      string             `yaml:"api_key_env"`
+	Headers        map[string]string  `yaml:"headers"`
+	Autodiscover   AutodiscoverConfig `yaml:"autodiscover"`
+	Limits         Limits             `yaml:"limits"`
+	RequestTimeout Duration           `yaml:"request_timeout"`
 }
 
 type AutodiscoverConfig struct {
@@ -158,6 +160,9 @@ func (c *Config) defaults() {
 	}
 	c.Server.ClientLimits.defaults()
 	for name, provider := range c.Providers {
+		if provider.Protocol == "" {
+			provider.Protocol = "openai"
+		}
 		provider.Limits.defaults()
 		if provider.Autodiscover.Enabled {
 			if provider.Autodiscover.Prefix == "" {
@@ -205,6 +210,12 @@ func (c *Config) Validate() error {
 		}
 		if err := p.Limits.validate("provider " + name); err != nil {
 			return err
+		}
+		if p.Protocol != "openai" && p.Protocol != "ollama" {
+			return fmt.Errorf("provider %q has unsupported protocol %q", name, p.Protocol)
+		}
+		if p.RequestTimeout.Duration < 0 {
+			return fmt.Errorf("provider %q request_timeout must not be negative", name)
 		}
 	}
 	if err := c.Server.ClientLimits.validate("server client_limits"); err != nil {

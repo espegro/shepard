@@ -176,6 +176,8 @@ providers:
 
   local:
     base_url: http://127.0.0.1:11434/v1
+    protocol: ollama
+    request_timeout: 5m
     api_key_env: LOCAL_API_KEY
 
   backup:
@@ -186,6 +188,12 @@ providers:
 The environment variables contain the provider credentials. They are read by
 Shepard and sent only to the selected upstream provider; client credentials are
 never used as provider credentials.
+
+`protocol` defaults to `openai`. Set it to `ollama` for Ollama-compatible
+providers so Shepard can translate fields such as `thinking` to Ollama's
+`think` option. `request_timeout` is an optional per-provider deadline; when a
+provider exceeds it, Shepard can fail over to the next target instead of
+waiting for the global request timeout.
 
 A model can target one provider:
 
