@@ -6,9 +6,10 @@ Shepard is a working OpenAI-compatible LLM gateway with:
 
 - Static model aliases and backend model autodiscovery
 - Multiple provider targets with retry and failover
-- Per-client, per-model, and per-provider rate/concurrency limits
+- Early global ingress admission plus per-client, per-model, and per-provider
+  rate/concurrency limits
 - A bounded request queue with configurable wait timeout
-- `/readyz` provider readiness checks
+- Coalesced, briefly cached `/readyz` provider readiness checks
 - Prometheus-compatible metrics at `/_shepard/metrics`
 - Optional, redacted request/response logging with bounded body capture
 - Optional IPv4/IPv6 client network allowlist with single-address and CIDR support
@@ -20,6 +21,8 @@ Shepard is a working OpenAI-compatible LLM gateway with:
 - SQLite-backed usage accounting
 - Configuration reload through `SIGHUP`
 - Request and upstream timeouts, including a bounded request-body read window
+  and streaming write-idle deadline
+- Explicit safe-header allowlists at the client/provider boundary
 - systemd installation documentation and an installer for RHEL 9+ and Ubuntu 24.04+
 - Readable example configurations for minimal, local autodiscovery, and production failover deployments
 - Architecture and design rationale in [`docs/design.md`](docs/design.md)
@@ -31,6 +34,29 @@ go test -race ./...
 ```
 
 ## Deferred work
+
+### Security hardening TODO
+
+High priority:
+
+- Build and deploy Shepard with Go 1.26.6 or newer. The current deployed
+  binary was built with Go 1.26.0, and `govulncheck` reports reachable
+  standard-library vulnerabilities in HTTP, TLS, URL parsing, and related
+  code.
+- Require inbound bearer authentication for deployments that are not limited
+  to a fully trusted network. Document TLS termination or mTLS through a
+  reverse proxy for protecting API keys, prompts, and responses in transit.
+
+Medium priority:
+
+- Reject empty, whitespace-only, duplicate, placeholder, and unreasonably
+  short `inbound_api_keys` during configuration validation.
+- Expand or make configurable the sensitive-header redaction list used by
+  optional request/response logging.
+- Consider separating management endpoints (`/readyz`, metrics, and usage)
+  onto a dedicated listener or applying separate ACL/authentication policy.
+- Validate `Host` and trust `X-Forwarded-Proto` only from configured trusted
+  proxies when generating `/opencode.json`.
 
 ### Dynamic capacity-aware queue
 

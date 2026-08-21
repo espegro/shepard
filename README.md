@@ -27,10 +27,11 @@ that operational complexity behind one API:
 - Backend model autodiscovery through `/v1/models`, with collision-safe prefixes
 - Provider API keys from environment variables and custom upstream headers
 - Per-client, per-model, and per-provider request-rate and concurrency limits
+- Early global concurrency admission before request bodies are read
 - Small bounded queue for short overload bursts, with timeout-aware rejection
 - Optional IPv4/IPv6 client ACLs using single addresses or CIDR ranges
 - Optional trusted-proxy handling for `X-Forwarded-For`
-- Separate liveness (`/healthz`) and provider readiness (`/readyz`) endpoints
+- Separate liveness (`/healthz`) and cached provider readiness (`/readyz`) endpoints
 - Prometheus-compatible metrics and SQLite-backed usage totals
 - Optional redacted request/response logging with bounded body capture
 - Generated OpenCode configuration at `/opencode.json`
@@ -105,6 +106,8 @@ curl http://localhost:8080/v1/chat/completions \
 Set one or more `server.inbound_api_keys` to require `Authorization: Bearer ...`
 from clients. Provider credentials are read from the environment variable named by
 `api_key_env`; secrets therefore do not need to be stored in YAML.
+Shepard logs a prominent warning when it binds a wildcard address without
+either inbound bearer keys or a client network ACL.
 
 An optional network allowlist can restrict which client IP addresses may reach
 the listener. It accepts single IPv4/IPv6 addresses and CIDR ranges:
@@ -145,7 +148,8 @@ layer as defense in depth.
 - `GET /_shepard/usage` reports process-local token totals returned by providers
 - `GET /_shepard/metrics` exposes Prometheus-compatible process metrics
 - `GET /healthz` is intentionally unauthenticated
-- `GET /readyz` checks whether at least one provider is reachable
+- `GET /readyz` checks whether at least one provider is reachable; checks are
+  coalesced and cached for `server.readiness_cache_ttl` (3 seconds by default)
 
 All routes except `/healthz` and `/readyz` follow the configured inbound
 authentication policy.
@@ -362,6 +366,18 @@ models:
 Client limits apply per inbound API key, or per source IP when authentication is
 disabled. Model and provider limits are shared across clients. A zero or omitted
 value disables that limit. Rejected requests return `429` and `Retry-After: 1`.
+
+`server.max_concurrent_requests` is a global ingress limit applied before
+request bodies are read or decoded (64 by default). `server.max_header_bytes`
+limits request headers (64 KiB by default), and `server.write_idle_timeout`
+refreshes the write deadline for every streamed response chunk (30 seconds by
+default).
+
+Shepard forwards only an explicit set of safe request and response headers.
+Client authorization, cookies, proxy credentials, API keys, hop-by-hop
+headers, provider cookies, and arbitrary custom headers do not cross the
+provider boundary. Provider-specific headers must be configured under the
+provider's `headers` map.
 
 ## Optional request logging
 

@@ -29,6 +29,7 @@ type Gateway struct {
 	logger      *slog.Logger
 	usage       *usageStore
 	discovery   *discoveryStore
+	readiness   *readinessCache
 	limits      *limitStore
 	queue       *requestQueue
 	metrics     metrics
@@ -61,6 +62,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Gateway, error) {
 		logger:      logger,
 		usage:       usage,
 		discovery:   newDiscoveryStore(),
+		readiness:   newReadinessCache(),
 		limits:      newLimitStore(),
 		queue:       newRequestQueue(queueSize),
 		usageDBPath: cfg.Server.UsageDB,
@@ -98,6 +100,7 @@ func (g *Gateway) Reload(cfg *config.Config) error {
 	}
 	g.queue.setMax(queueSize)
 	g.discovery.clear()
+	g.readiness.clear()
 	g.limits.clear()
 	return nil
 }
@@ -268,6 +271,20 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 		ctx, cancel = context.WithTimeout(ctx, cfg.Server.RequestTimeout.Duration)
 		defer cancel()
 	}
+	releaseIngress, admitted, queued := g.admitWithQueue(ctx, cfg.Server.Queue.WaitTimeout.Duration,
+		admissionScope{key: "ingress", limits: config.Limits{MaxConcurrent: cfg.Server.MaxConcurrentRequests}},
+		admissionScope{key: "client:" + clientIdentity(r, g.trusted.Load()), limits: cfg.Server.ClientLimits},
+	)
+	if queued {
+		g.metrics.queueWaits.Add(1)
+	}
+	if !admitted {
+		g.metrics.queueRejected.Add(1)
+		writeRateLimitError(w)
+		return
+	}
+	defer releaseIngress()
+
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, cfg.Server.MaxRequestBytes))
 	if err != nil {
 		writeAPIError(w, http.StatusRequestEntityTooLarge, "request body is too large")
@@ -299,7 +316,6 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 		}
 	}
 	releaseRequest, admitted, queued := g.admitWithQueue(ctx, cfg.Server.Queue.WaitTimeout.Duration,
-		admissionScope{key: "client:" + clientIdentity(r), limits: cfg.Server.ClientLimits},
 		admissionScope{key: "model:" + alias, limits: model.Limits},
 	)
 	if queued {
@@ -321,6 +337,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 	var resp *http.Response
 	var selected config.TargetConfig
 	var releaseProvider func()
+	var cancelProvider context.CancelFunc
 	var lastErr error
 	providerLimited := false
 	targets := model.ResolvedTargets()
@@ -356,11 +373,11 @@ targetLoop:
 			}
 			candidateResp, requestErr := g.doUpstreamRequest(attemptCtx, r, provider, requestBody)
 			attemptTimedOut := errors.Is(attemptCtx.Err(), context.DeadlineExceeded)
-			if cancelAttempt != nil {
-				cancelAttempt()
-			}
 			g.metrics.upstreamRequests.Add(1)
 			if requestErr != nil {
+				if cancelAttempt != nil {
+					cancelAttempt()
+				}
 				g.metrics.upstreamErrors.Add(1)
 				providerRelease()
 				lastErr = requestErr
@@ -387,6 +404,9 @@ targetLoop:
 			if shouldRetrySame || shouldFailover {
 				_, _ = io.Copy(io.Discard, io.LimitReader(candidateResp.Body, 64<<10))
 				_ = candidateResp.Body.Close()
+				if cancelAttempt != nil {
+					cancelAttempt()
+				}
 				providerRelease()
 				g.logger.Warn("retryable provider response", "model", alias, "provider", candidate.Provider, "upstream_model", candidate.Model, "status", candidateResp.StatusCode, "attempt", attempt+1, "duration_ms", time.Since(attemptStarted).Milliseconds())
 				if shouldRetrySame {
@@ -401,6 +421,7 @@ targetLoop:
 			resp = candidateResp
 			selected = candidate
 			releaseProvider = providerRelease
+			cancelProvider = cancelAttempt
 			break targetLoop
 		}
 	}
@@ -420,8 +441,11 @@ targetLoop:
 		writeAPIError(w, status, message)
 		return
 	}
-	defer resp.Body.Close()
 	defer releaseProvider()
+	if cancelProvider != nil {
+		defer cancelProvider()
+	}
+	defer resp.Body.Close()
 	g.metrics.completed.Add(1)
 	completed = true
 	copyResponseHeaders(w.Header(), resp.Header)
@@ -436,7 +460,11 @@ targetLoop:
 	responseReader = io.TeeReader(responseReader, capture)
 	destination := io.Writer(w)
 	if strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		destination = flushWriter{writer: w}
+		controller := http.NewResponseController(w)
+		if cfg.Server.WriteIdleTimeout.Duration > 0 {
+			defer func() { _ = controller.SetWriteDeadline(time.Time{}) }()
+		}
+		destination = flushWriter{writer: w, controller: controller, writeIdleTimeout: cfg.Server.WriteIdleTimeout.Duration}
 	}
 	_, copyErr := io.Copy(destination, responseReader)
 	g.usage.record(alias, resp.StatusCode, capture.Bytes())
@@ -632,10 +660,25 @@ func joinPrompt(parts ...string) string {
 
 func appendAny(head []any, tail ...any) []any { return append(head, tail...) }
 
+var forwardedRequestHeaders = map[string]struct{}{
+	"accept":          {},
+	"idempotency-key": {},
+	"x-request-id":    {},
+}
+
+var forwardedResponseHeaders = map[string]struct{}{
+	"cache-control":        {},
+	"content-encoding":     {},
+	"content-type":         {},
+	"openai-processing-ms": {},
+	"request-id":           {},
+	"retry-after":          {},
+	"x-request-id":         {},
+}
+
 func copyRequestHeaders(dst, src http.Header) {
 	for name, values := range src {
-		switch strings.ToLower(name) {
-		case "authorization", "host", "content-length", "connection":
+		if _, allowed := forwardedRequestHeaders[strings.ToLower(name)]; !allowed {
 			continue
 		}
 		for _, value := range values {
@@ -646,8 +689,7 @@ func copyRequestHeaders(dst, src http.Header) {
 
 func copyResponseHeaders(dst, src http.Header) {
 	for name, values := range src {
-		switch strings.ToLower(name) {
-		case "content-length", "connection":
+		if _, allowed := forwardedResponseHeaders[strings.ToLower(name)]; !allowed {
 			continue
 		}
 		for _, value := range values {
@@ -690,9 +732,18 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 
 func (b *tailBuffer) Bytes() []byte { return b.buf }
 
-type flushWriter struct{ writer http.ResponseWriter }
+type flushWriter struct {
+	writer           http.ResponseWriter
+	controller       *http.ResponseController
+	writeIdleTimeout time.Duration
+}
 
 func (w flushWriter) Write(p []byte) (int, error) {
+	if w.writeIdleTimeout > 0 {
+		if err := w.controller.SetWriteDeadline(time.Now().Add(w.writeIdleTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return 0, err
+		}
+	}
 	n, err := w.writer.Write(p)
 	if flusher, ok := w.writer.(http.Flusher); ok {
 		flusher.Flush()

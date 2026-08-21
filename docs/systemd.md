@@ -90,7 +90,13 @@ forwarded value for access control.
 
 The service stores its SQLite usage database under `/var/lib/shepard` when the
 configuration uses a relative `usage_db` path. The unit restricts writes to
-that directory and protects the rest of the filesystem.
+that directory and protects the rest of the filesystem. A restrictive umask
+keeps newly created database and WAL files unreadable by other users.
+
+The installed unit also drops all capabilities, hides devices and sensitive
+kernel interfaces, restricts namespaces and executable memory, and applies the
+`@system-service` system-call allowlist. These restrictions retain the network
+and `/var/lib/shepard` access required by Go and SQLite.
 
 ## Uninstall
 

@@ -5,7 +5,12 @@ server:
   usage_db: shepard-usage.db
   request_timeout: 10m
   read_timeout: 30s
+  write_idle_timeout: 30s
+  readiness_cache_ttl: 3s
+  max_header_bytes: 65536
   max_request_bytes: 8388608
+  # Global protection applied before Shepard reads and decodes request bodies.
+  max_concurrent_requests: 64
   queue:
     enabled: true
     max_size: 32

@@ -25,8 +25,14 @@ models:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Server.Listen != ":8080" || cfg.Server.MaxRequestBytes == 0 || cfg.Server.ReadTimeout.Duration == 0 || cfg.Server.Queue.Enabled == nil || !*cfg.Server.Queue.Enabled {
+	if cfg.Server.Listen != ":8080" || cfg.Server.MaxRequestBytes == 0 || cfg.Server.MaxHeaderBytes == 0 ||
+		cfg.Server.MaxConcurrentRequests == 0 || cfg.Server.ReadTimeout.Duration == 0 ||
+		cfg.Server.WriteIdleTimeout.Duration == 0 || cfg.Server.ReadinessCacheTTL.Duration == 0 ||
+		cfg.Server.Queue.Enabled == nil || !*cfg.Server.Queue.Enabled {
 		t.Fatalf("defaults not applied: %+v", cfg.Server)
+	}
+	if !cfg.Server.BroadlyExposedWithoutAccessControls() {
+		t.Fatal("default wildcard listener without auth or ACL should be reported as broadly exposed")
 	}
 
 	invalid := filepath.Join(dir, "invalid.yaml")
@@ -46,6 +52,27 @@ models:
 	_, err = Load(invalid)
 	if err == nil || !strings.Contains(err.Error(), "lissten") {
 		t.Fatalf("expected unknown-field error, got %v", err)
+	}
+}
+
+func TestBroadExposureWarningRequiresWildcardWithoutControls(t *testing.T) {
+	tests := []struct {
+		name   string
+		server ServerConfig
+		want   bool
+	}{
+		{name: "wildcard IPv4", server: ServerConfig{Listen: "0.0.0.0:8080"}, want: true},
+		{name: "wildcard IPv6", server: ServerConfig{Listen: "[::]:8080"}, want: true},
+		{name: "loopback", server: ServerConfig{Listen: "127.0.0.1:8080"}},
+		{name: "authenticated", server: ServerConfig{Listen: ":8080", InboundAPIKeys: []string{"secret"}}},
+		{name: "ACL protected", server: ServerConfig{Listen: ":8080", ClientNetworks: []string{"10.0.0.0/24"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.server.BroadlyExposedWithoutAccessControls(); got != test.want {
+				t.Fatalf("BroadlyExposedWithoutAccessControls() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

@@ -24,10 +24,10 @@ accounting authority, or a replacement for a network firewall and TLS proxy.
 HTTP client
     |
     v
-Network ACL -> authentication -> request size/timeout
+Network ACL -> authentication -> early ingress/client admission
     |
     v
-Model alias resolution -> client/model admission and bounded queue
+Request size/timeout -> model alias resolution -> model admission and bounded queue
     |
     v
 Ordered provider targets -> provider admission -> upstream request
@@ -105,9 +105,12 @@ Chat Completions messages and Responses instructions differently.
 
 ## Limits and queueing
 
-Admission limits exist at client, model, and provider scope. The limiter uses
-token buckets for request rate and counters for active concurrency. A rejected
-admission returns `429` rather than creating an unbounded in-memory queue.
+Admission limits exist at global ingress, client, model, and provider scope.
+Global ingress and client admission happen before the request body is read;
+model and provider admission happen after routing information is known. The
+limiter uses token buckets for request rate and counters for active
+concurrency. A rejected admission returns `429` rather than creating an
+unbounded in-memory queue.
 
 The bounded queue is a small backpressure buffer for short overload bursts. It
 has a configurable maximum size and wait timeout. Requests that cannot be
@@ -143,7 +146,8 @@ confidential. It is intended for short-lived debugging, not routine operation.
 ## Health, readiness, and metrics
 
 - `/healthz` answers whether the Shepard process is alive.
-- `/readyz` probes providers and returns `503` when none are reachable.
+- `/readyz` probes providers and returns `503` when none are reachable. Probes
+  are coalesced and briefly cached to prevent request fan-out amplification.
 - `/_shepard/metrics` exposes process and queue counters in Prometheus format.
 - `/_shepard/usage` reports persisted token totals when providers return usage.
 

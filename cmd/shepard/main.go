@@ -29,9 +29,7 @@ func main() {
 		logger.Info("configuration is valid", "path", *configPath)
 		return
 	}
-	if len(cfg.Server.InboundAPIKeys) == 0 {
-		logger.Warn("inbound authentication is disabled; Shepard is accepting unauthenticated requests")
-	}
+	logExposureWarnings(logger, cfg)
 
 	gw, err := gateway.New(cfg, logger)
 	if err != nil {
@@ -45,6 +43,7 @@ func main() {
 		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout.Duration,
 		ReadTimeout:       cfg.Server.ReadTimeout.Duration,
 		IdleTimeout:       cfg.Server.IdleTimeout.Duration,
+		MaxHeaderBytes:    cfg.Server.MaxHeaderBytes,
 	}
 
 	reload := make(chan os.Signal, 1)
@@ -60,6 +59,7 @@ func main() {
 				logger.Error("reload configuration", "error", err)
 				continue
 			}
+			logExposureWarnings(logger, next)
 			logger.Info("configuration reloaded")
 		}
 	}()
@@ -79,5 +79,15 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Error("serve", "error", err)
 		os.Exit(1)
+	}
+}
+
+func logExposureWarnings(logger *slog.Logger, cfg *config.Config) {
+	if cfg.Server.BroadlyExposedWithoutAccessControls() {
+		logger.Warn("Shepard is listening on a wildcard address without inbound authentication or a client network ACL")
+		return
+	}
+	if len(cfg.Server.InboundAPIKeys) == 0 {
+		logger.Warn("inbound authentication is disabled; access depends on the listener and client network ACL")
 	}
 }

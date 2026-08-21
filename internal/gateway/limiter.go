@@ -3,7 +3,6 @@ package gateway
 import (
 	"crypto/sha256"
 	"fmt"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -93,14 +92,13 @@ func (s *limitStore) admit(scopes ...admissionScope) (func(), bool) {
 	}, true
 }
 
-func clientIdentity(r *http.Request) string {
+func clientIdentity(r *http.Request, trusted *clientACL) string {
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		digest := sha256.Sum256([]byte(auth))
 		return fmt.Sprintf("key:%x", digest[:8])
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil && host != "" {
-		return "ip:" + host
+	if ip := forwardedClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), trusted); ip != nil {
+		return "ip:" + ip.String()
 	}
 	return "ip:" + r.RemoteAddr
 }

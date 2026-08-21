@@ -23,9 +23,18 @@ server:
   usage_db: /var/lib/shepard/shepard-usage.db
   # Protects against clients that send a request body too slowly.
   read_timeout: 30s
+  # Refresh the write deadline for each streamed chunk so slow clients cannot
+  # retain provider capacity indefinitely.
+  write_idle_timeout: 30s
+  # Coalesce and briefly cache readiness probes instead of probing every
+  # provider for every /readyz request.
+  readiness_cache_ttl: 3s
+  max_header_bytes: 65536
   # Covers provider work, retries, failover, and queue waiting.
   request_timeout: 10m
   max_request_bytes: 8388608
+  # This admission limit is enforced before the request body is read.
+  max_concurrent_requests: 64
   queue:
     enabled: true
     # Keep this bounded. A queue is backpressure, not a replacement for

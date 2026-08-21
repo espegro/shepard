@@ -5,12 +5,94 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"sync"
 	"time"
 
 	"shepard/internal/config"
 )
 
+type readinessResult struct {
+	status map[string]string
+	ready  bool
+}
+
+type readinessCache struct {
+	mu         sync.Mutex
+	result     readinessResult
+	expires    time.Time
+	inflight   chan struct{}
+	generation uint64
+}
+
+func newReadinessCache() *readinessCache { return &readinessCache{} }
+
+func (c *readinessCache) clear() {
+	c.mu.Lock()
+	c.result = readinessResult{}
+	c.expires = time.Time{}
+	c.generation++
+	c.mu.Unlock()
+}
+
 func (g *Gateway) ready(w http.ResponseWriter, r *http.Request, cfg *config.Config) {
+	result, ok := g.cachedReadiness(r.Context(), cfg)
+	if !ok {
+		writeAPIError(w, http.StatusServiceUnavailable, "readiness check cancelled")
+		return
+	}
+	code := http.StatusOK
+	state := "ready"
+	if !result.ready {
+		code = http.StatusServiceUnavailable
+		state = "not_ready"
+	}
+	writeJSON(w, code, map[string]any{"status": state, "providers": result.status})
+}
+
+func (g *Gateway) cachedReadiness(ctx context.Context, cfg *config.Config) (readinessResult, bool) {
+	for {
+		g.readiness.mu.Lock()
+		if !g.readiness.expires.IsZero() && time.Now().Before(g.readiness.expires) {
+			result := cloneReadinessResult(g.readiness.result)
+			g.readiness.mu.Unlock()
+			return result, true
+		}
+		if inflight := g.readiness.inflight; inflight != nil {
+			g.readiness.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return readinessResult{}, false
+			case <-inflight:
+				continue
+			}
+		}
+		inflight := make(chan struct{})
+		generation := g.readiness.generation
+		g.readiness.inflight = inflight
+		g.readiness.mu.Unlock()
+
+		result := g.checkReadiness(cfg)
+		g.readiness.mu.Lock()
+		if generation == g.readiness.generation {
+			g.readiness.result = cloneReadinessResult(result)
+			g.readiness.expires = time.Now().Add(cfg.Server.ReadinessCacheTTL.Duration)
+		}
+		g.readiness.inflight = nil
+		close(inflight)
+		g.readiness.mu.Unlock()
+		return result, true
+	}
+}
+
+func cloneReadinessResult(result readinessResult) readinessResult {
+	status := make(map[string]string, len(result.status))
+	for name, value := range result.status {
+		status[name] = value
+	}
+	return readinessResult{status: status, ready: result.ready}
+}
+
+func (g *Gateway) checkReadiness(cfg *config.Config) readinessResult {
 	names := make([]string, 0, len(cfg.Providers))
 	for name := range cfg.Providers {
 		names = append(names, name)
@@ -23,7 +105,7 @@ func (g *Gateway) ready(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 	results := make(chan result, len(names))
 	for _, name := range names {
 		go func(name string) {
-			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			results <- result{name: name, ok: g.checkProvider(ctx, cfg.Providers[name])}
 		}(name)
@@ -39,13 +121,7 @@ func (g *Gateway) ready(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 			status[item.name] = "unavailable"
 		}
 	}
-	code := http.StatusOK
-	state := "ready"
-	if !ready {
-		code = http.StatusServiceUnavailable
-		state = "not_ready"
-	}
-	writeJSON(w, code, map[string]any{"status": state, "providers": status})
+	return readinessResult{status: status, ready: ready}
 }
 
 func (g *Gateway) checkProvider(ctx context.Context, provider config.ProviderConfig) bool {

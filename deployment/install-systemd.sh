@@ -89,19 +89,40 @@ ExecStart=/usr/local/bin/shepard -config /etc/shepard/shepard.yaml
 Restart=on-failure
 RestartSec=5s
 StateDirectory=shepard
+StateDirectoryMode=0750
 
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectHome=true
 ProtectSystem=strict
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
 ReadWritePaths=/var/lib/shepard
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 chown -R shepard:shepard /var/lib/shepard
+chmod 0750 /var/lib/shepard
+find /var/lib/shepard -maxdepth 1 -type f -name 'shepard-usage.db*' -exec chmod 0640 {} +
 systemctl daemon-reload
 systemctl enable shepard.service
 

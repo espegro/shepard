@@ -31,19 +31,23 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Listen               string        `yaml:"listen"`
-	InboundAPIKeys       []string      `yaml:"inbound_api_keys"`
-	UsageDB              string        `yaml:"usage_db"`
-	ClientLimits         Limits        `yaml:"client_limits"`
-	ReadHeaderTimeout    Duration      `yaml:"read_header_timeout"`
-	IdleTimeout          Duration      `yaml:"idle_timeout"`
-	RequestTimeout       Duration      `yaml:"request_timeout"`
-	ReadTimeout          Duration      `yaml:"read_timeout"`
-	MaxRequestBytes      int64         `yaml:"max_request_bytes"`
-	Queue                QueueConfig   `yaml:"queue"`
-	Logging              LoggingConfig `yaml:"logging"`
-	ClientNetworks       []string      `yaml:"client_networks"`
-	TrustedProxyNetworks []string      `yaml:"trusted_proxy_networks"`
+	Listen                string        `yaml:"listen"`
+	InboundAPIKeys        []string      `yaml:"inbound_api_keys"`
+	UsageDB               string        `yaml:"usage_db"`
+	MaxConcurrentRequests int           `yaml:"max_concurrent_requests"`
+	ClientLimits          Limits        `yaml:"client_limits"`
+	ReadHeaderTimeout     Duration      `yaml:"read_header_timeout"`
+	IdleTimeout           Duration      `yaml:"idle_timeout"`
+	RequestTimeout        Duration      `yaml:"request_timeout"`
+	ReadTimeout           Duration      `yaml:"read_timeout"`
+	WriteIdleTimeout      Duration      `yaml:"write_idle_timeout"`
+	ReadinessCacheTTL     Duration      `yaml:"readiness_cache_ttl"`
+	MaxHeaderBytes        int           `yaml:"max_header_bytes"`
+	MaxRequestBytes       int64         `yaml:"max_request_bytes"`
+	Queue                 QueueConfig   `yaml:"queue"`
+	Logging               LoggingConfig `yaml:"logging"`
+	ClientNetworks        []string      `yaml:"client_networks"`
+	TrustedProxyNetworks  []string      `yaml:"trusted_proxy_networks"`
 }
 
 type QueueConfig struct {
@@ -139,6 +143,18 @@ func (c *Config) defaults() {
 	if c.Server.ReadTimeout.Duration == 0 {
 		c.Server.ReadTimeout.Duration = 30 * time.Second
 	}
+	if c.Server.WriteIdleTimeout.Duration == 0 {
+		c.Server.WriteIdleTimeout.Duration = 30 * time.Second
+	}
+	if c.Server.ReadinessCacheTTL.Duration == 0 {
+		c.Server.ReadinessCacheTTL.Duration = 3 * time.Second
+	}
+	if c.Server.MaxHeaderBytes == 0 {
+		c.Server.MaxHeaderBytes = 64 << 10
+	}
+	if c.Server.MaxConcurrentRequests == 0 {
+		c.Server.MaxConcurrentRequests = 64
+	}
 	if c.Server.Queue.MaxSize == 0 {
 		c.Server.Queue.MaxSize = 32
 	}
@@ -230,6 +246,18 @@ func (c *Config) Validate() error {
 	if c.Server.Logging.MaxBodyBytes < 0 {
 		return errors.New("server logging max_body_bytes must not be negative")
 	}
+	if c.Server.MaxConcurrentRequests < 0 {
+		return errors.New("server max_concurrent_requests must not be negative")
+	}
+	if c.Server.MaxHeaderBytes < 0 {
+		return errors.New("server max_header_bytes must not be negative")
+	}
+	if c.Server.WriteIdleTimeout.Duration < 0 {
+		return errors.New("server write_idle_timeout must not be negative")
+	}
+	if c.Server.ReadinessCacheTTL.Duration < 0 {
+		return errors.New("server readiness_cache_ttl must not be negative")
+	}
 	for _, value := range append(append([]string{}, c.Server.ClientNetworks...), c.Server.TrustedProxyNetworks...) {
 		value = strings.TrimSpace(value)
 		if value == "" {
@@ -280,6 +308,22 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// BroadlyExposedWithoutAccessControls reports configurations that bind a
+// wildcard address without either bearer authentication or a client ACL.
+// This remains a warning rather than a validation error so intentionally open
+// development deployments continue to work.
+func (s ServerConfig) BroadlyExposedWithoutAccessControls() bool {
+	if len(s.InboundAPIKeys) > 0 || len(s.ClientNetworks) > 0 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(s.Listen)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return host == "" || (ip != nil && ip.IsUnspecified())
 }
 
 func (l Limits) validate(scope string) error {

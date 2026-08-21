@@ -164,6 +164,142 @@ func TestReadinessAndMetricsEndpoints(t *testing.T) {
 	}
 }
 
+func TestReadinessCachesProviderChecks(t *testing.T) {
+	t.Setenv("TEST_PROVIDER_KEY", "provider-secret")
+	checks := 0
+	cfg := testConfig("http://provider.invalid/v1")
+	cfg.Server.ReadinessCacheTTL = config.Duration{Duration: time.Minute}
+	g := mustGateway(t, cfg)
+	g.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		checks++
+		return jsonResponse(r, `{"object":"list","data":[]}`), nil
+	})
+
+	for range 2 {
+		response := httptest.NewRecorder()
+		g.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("unexpected readiness status %d: %s", response.Code, response.Body.String())
+		}
+	}
+	if checks != 1 {
+		t.Fatalf("provider readiness checks = %d, want 1", checks)
+	}
+}
+
+func TestHeaderForwardingUsesAllowlists(t *testing.T) {
+	source := http.Header{
+		"Accept":              []string{"application/json"},
+		"Authorization":       []string{"Bearer client-secret"},
+		"Cookie":              []string{"session=secret"},
+		"Proxy-Authorization": []string{"Basic secret"},
+		"X-Api-Key":           []string{"client-key"},
+		"X-Request-Id":        []string{"request-123"},
+	}
+	requestHeaders := make(http.Header)
+	copyRequestHeaders(requestHeaders, source)
+	if requestHeaders.Get("Accept") == "" || requestHeaders.Get("X-Request-Id") == "" {
+		t.Fatalf("safe request headers were not forwarded: %#v", requestHeaders)
+	}
+	for _, name := range []string{"Authorization", "Cookie", "Proxy-Authorization", "X-Api-Key"} {
+		if requestHeaders.Get(name) != "" {
+			t.Fatalf("sensitive request header %s was forwarded", name)
+		}
+	}
+
+	responseHeaders := make(http.Header)
+	copyResponseHeaders(responseHeaders, http.Header{
+		"Content-Type": []string{"application/json"},
+		"Set-Cookie":   []string{"session=provider"},
+		"Server":       []string{"provider-internal"},
+	})
+	if responseHeaders.Get("Content-Type") == "" || responseHeaders.Get("Set-Cookie") != "" || responseHeaders.Get("Server") != "" {
+		t.Fatalf("unexpected forwarded response headers: %#v", responseHeaders)
+	}
+}
+
+func TestProviderTimeoutRemainsActiveWhileReadingBody(t *testing.T) {
+	t.Setenv("TEST_PROVIDER_KEY", "provider-secret")
+	cfg := testConfig("http://provider.invalid/v1")
+	provider := cfg.Providers["test"]
+	provider.RequestTimeout = config.Duration{Duration: time.Second}
+	cfg.Providers["test"] = provider
+	g := mustGateway(t, cfg)
+	g.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       &delayedContextBody{ctx: r.Context(), data: []byte(`{"ok":true}`)},
+			Request:    r,
+		}, nil
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"stable","messages":[]}`))
+	response := httptest.NewRecorder()
+	g.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != `{"ok":true}` {
+		t.Fatalf("provider body was cancelled early: status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func TestGlobalIngressLimitAppliesBeforeReadingBody(t *testing.T) {
+	cfg := testConfig("http://provider.invalid/v1")
+	cfg.Server.MaxConcurrentRequests = 1
+	g := mustGateway(t, cfg)
+
+	reader := &blockingReader{entered: make(chan struct{}), release: make(chan struct{})}
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		g.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reader))
+	}()
+	<-reader.entered
+
+	second := httptest.NewRecorder()
+	g.ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"stable","messages":[]}`)))
+	if second.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request status = %d, want 429", second.Code)
+	}
+	close(reader.release)
+	<-firstDone
+}
+
+type blockingReader struct {
+	entered chan struct{}
+	release chan struct{}
+	once    bool
+}
+
+func (r *blockingReader) Read([]byte) (int, error) {
+	if !r.once {
+		r.once = true
+		close(r.entered)
+	}
+	<-r.release
+	return 0, io.EOF
+}
+
+type delayedContextBody struct {
+	ctx  interface{ Done() <-chan struct{} }
+	data []byte
+	done bool
+}
+
+func (b *delayedContextBody) Read(p []byte) (int, error) {
+	if b.done {
+		return 0, io.EOF
+	}
+	select {
+	case <-b.ctx.Done():
+		return 0, errors.New("request context cancelled before response body was read")
+	case <-time.After(10 * time.Millisecond):
+	}
+	b.done = true
+	return copy(p, b.data), nil
+}
+
+func (b *delayedContextBody) Close() error { return nil }
+
 func TestClientNetworkACLSupportsIPv4AndIPv6(t *testing.T) {
 	acl, err := newClientACL([]string{"192.0.2.10", "2001:db8:1234::/48"})
 	if err != nil {
