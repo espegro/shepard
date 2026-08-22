@@ -1,5 +1,7 @@
 # Shepard
 
+![Shepard LLM gateway architecture](shepard-architecture.svg)
+
 Shepard is a small, self-hosted OpenAI-compatible gateway for routing LLM
 requests to one or more backends. It gives clients one stable endpoint and
 stable model names while the operator keeps provider credentials, backend

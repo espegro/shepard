@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="920" viewBox="0 0 1600 920" role="img" aria-labelledby="title desc">
+  <title id="title">Shepard LLM gateway architecture</title>
+  <desc id="desc">Clients send OpenAI-compatible requests through Shepard. Shepard authenticates and applies network ACLs, admission controls, model aliases, limits, queues, retries and failover before forwarding to local or remote providers. Responses are streamed back while metrics, logs and usage accounting are produced.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08111f"/>
+      <stop offset="1" stop-color="#101d35"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="provider" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#0891b2"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity=".28"/>
+    </filter>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="160%">
+      <feGaussianBlur stdDeviation="22"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8ca7d8"/>
+    </marker>
+    <style>
+      .title { font: 700 42px Inter, ui-sans-serif, system-ui, sans-serif; fill: #f8fafc; letter-spacing: -1px; }
+      .subtitle { font: 400 18px Inter, ui-sans-serif, system-ui, sans-serif; fill: #a9bad8; }
+      .label { font: 700 20px Inter, ui-sans-serif, system-ui, sans-serif; fill: #f8fafc; }
+      .small { font: 400 15px Inter, ui-sans-serif, system-ui, sans-serif; fill: #c2d1e8; }
+      .tiny { font: 600 13px Inter, ui-sans-serif, system-ui, sans-serif; fill: #91a8cc; letter-spacing: .5px; }
+      .pill { font: 700 13px Inter, ui-sans-serif, system-ui, sans-serif; fill: #dbeafe; letter-spacing: .8px; }
+      .box { stroke: #35517c; stroke-width: 1.5; }
+      .line { stroke: #8ca7d8; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .dashed { stroke-dasharray: 7 7; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="920" rx="28" fill="url(#bg)"/>
+  <circle cx="760" cy="390" r="310" fill="#315dcc" opacity=".12" filter="url(#soft)"/>
+  <circle cx="1320" cy="485" r="260" fill="#0ea5a4" opacity=".10" filter="url(#soft)"/>
+
+  <text x="80" y="78" class="title">Shepard</text>
+  <text x="80" y="112" class="subtitle">A small, self-hosted OpenAI-compatible gateway for routing LLM requests</text>
+  <rect x="1272" y="57" width="245" height="34" rx="17" fill="#162a4a" stroke="#31517f"/>
+  <text x="1394" y="79" text-anchor="middle" class="pill">STABLE API · CONTROLLED BACKENDS</text>
+
+  <!-- clients -->
+  <g filter="url(#shadow)">
+    <rect x="75" y="278" width="245" height="230" rx="22" fill="#142743" class="box"/>
+    <rect x="96" y="299" width="92" height="27" rx="13.5" fill="#1d416c"/>
+    <text x="142" y="318" text-anchor="middle" class="pill">CLIENTS</text>
+    <text x="110" y="367" class="label">OpenAI-compatible</text>
+    <text x="110" y="394" class="label">clients</text>
+    <text x="110" y="438" class="small">OpenCode · curl · SDKs</text>
+    <text x="110" y="464" class="small">Chat Completions</text>
+    <text x="110" y="490" class="small">Responses · streaming</text>
+  </g>
+
+  <!-- ingress -->
+  <g filter="url(#shadow)">
+    <rect x="390" y="210" width="350" height="370" rx="25" fill="#172d51" class="box"/>
+    <rect x="416" y="235" width="119" height="27" rx="13.5" fill="#244f94"/>
+    <text x="475" y="254" text-anchor="middle" class="pill">SHEPARD CORE</text>
+    <text x="416" y="306" class="label">Ingress &amp; policy</text>
+    <line x1="416" y1="326" x2="714" y2="326" stroke="#385781"/>
+    <circle cx="430" cy="359" r="5" fill="#60a5fa"/><text x="448" y="365" class="small">Bearer authentication</text>
+    <circle cx="430" cy="393" r="5" fill="#60a5fa"/><text x="448" y="399" class="small">IPv4/IPv6 network ACL</text>
+    <circle cx="430" cy="427" r="5" fill="#60a5fa"/><text x="448" y="433" class="small">Model alias resolution</text>
+    <circle cx="430" cy="461" r="5" fill="#60a5fa"/><text x="448" y="467" class="small">Request size &amp; timeouts</text>
+    <circle cx="430" cy="495" r="5" fill="#60a5fa"/><text x="448" y="501" class="small">Client/model/provider limits</text>
+    <circle cx="430" cy="529" r="5" fill="#60a5fa"/><text x="448" y="535" class="small">Bounded queue &amp; admission</text>
+  </g>
+
+  <!-- routing -->
+  <g filter="url(#shadow)">
+    <rect x="810" y="210" width="345" height="370" rx="25" fill="url(#core)" class="box"/>
+    <rect x="836" y="235" width="105" height="27" rx="13.5" fill="#ffffff" opacity=".18"/>
+    <text x="888" y="254" text-anchor="middle" class="pill">ROUTING</text>
+    <text x="836" y="306" class="label">Stable model aliases</text>
+    <text x="836" y="336" class="small">coding_model → ordered targets</text>
+    <line x1="836" y1="356" x2="1129" y2="356" stroke="#ffffff" opacity=".25"/>
+    <circle cx="850" cy="390" r="5" fill="#c4b5fd"/><text x="868" y="396" class="small">Provider autodiscovery</text>
+    <circle cx="850" cy="424" r="5" fill="#c4b5fd"/><text x="868" y="430" class="small">Prompt prepend/append</text>
+    <circle cx="850" cy="458" r="5" fill="#c4b5fd"/><text x="868" y="464" class="small">Request overrides</text>
+    <circle cx="850" cy="492" r="5" fill="#c4b5fd"/><text x="868" y="498" class="small">Retries + failover</text>
+    <circle cx="850" cy="526" r="5" fill="#c4b5fd"/><text x="868" y="532" class="small">Streaming passthrough</text>
+  </g>
+
+  <!-- providers -->
+  <g filter="url(#shadow)">
+    <rect x="1230" y="195" width="285" height="145" rx="22" fill="url(#provider)" class="box"/>
+    <text x="1260" y="242" class="label">Local providers</text>
+    <text x="1260" y="273" class="small">Ollama · on-prem models</text>
+    <text x="1260" y="300" class="small">GPU capacity stays local</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1230" y="385" width="285" height="145" rx="22" fill="#135b74" class="box"/>
+    <text x="1260" y="432" class="label">Remote providers</text>
+    <text x="1260" y="463" class="small">OpenAI · compatible APIs</text>
+    <text x="1260" y="490" class="small">Credentials stay server-side</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="1230" y="575" width="285" height="145" rx="22" fill="#164e63" class="box"/>
+    <text x="1260" y="622" class="label">Failover targets</text>
+    <text x="1260" y="653" class="small">Ordered targets per alias</text>
+    <text x="1260" y="680" class="small">No replay after streaming starts</text>
+  </g>
+
+  <!-- arrows -->
+  <path d="M320 393 H390" class="line"/>
+  <text x="355" y="378" text-anchor="middle" class="tiny">REQUEST</text>
+  <path d="M740 393 H810" class="line"/>
+  <text x="775" y="378" text-anchor="middle" class="tiny">ADMITTED</text>
+  <path d="M1155 270 H1230" class="line"/>
+  <path d="M1155 457 H1230" class="line"/>
+  <path d="M1155 646 H1230" class="line"/>
+  <path d="M1230 755 C1070 805 620 805 320 488" class="line dashed" opacity=".65"/>
+  <text x="785" y="827" text-anchor="middle" class="tiny">RESPONSE STREAM / JSON</text>
+
+  <!-- operational sidecars -->
+  <g filter="url(#shadow)">
+    <rect x="390" y="665" width="765" height="145" rx="22" fill="#111f37" class="box"/>
+    <text x="420" y="707" class="label">Operational surface</text>
+    <line x1="420" y1="725" x2="1125" y2="725" stroke="#30496e"/>
+    <rect x="420" y="748" width="190" height="38" rx="19" fill="#19375d"/><text x="515" y="772" text-anchor="middle" class="small">Structured logs</text>
+    <rect x="635" y="748" width="190" height="38" rx="19" fill="#19375d"/><text x="730" y="772" text-anchor="middle" class="small">Prometheus metrics</text>
+    <rect x="850" y="748" width="190" height="38" rx="19" fill="#19375d"/><text x="945" y="772" text-anchor="middle" class="small">SQLite usage totals</text>
+  </g>
+  <path d="M565 580 V665" class="line dashed" opacity=".75"/>
+  <path d="M982 580 V665" class="line dashed" opacity=".75"/>
+
+  <text x="80" y="875" class="tiny">HEALTHZ · READYZ · /V1/MODELS · /OPENCODE.JSON</text>
+  <text x="1520" y="875" text-anchor="end" class="tiny">CONFIG RELOAD VIA SIGHUP</text>
+</svg>
