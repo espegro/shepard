@@ -101,11 +101,16 @@ func (s *limitStore) admit(scopes ...admissionScope) (func(), bool) {
 func clientIdentity(r *http.Request, trusted *clientACL) string {
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		// Group requests by credential without retaining the credential itself.
-		digest := sha256.Sum256([]byte(auth))
-		return fmt.Sprintf("key:%x", digest[:8])
+		return fingerprintIdentity("key", auth)
 	}
 	if ip := forwardedClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), trusted); ip != nil {
-		return "ip:" + ip.String()
+		// Accounting persists this identity, so do not retain the raw address.
+		return fingerprintIdentity("ip", ip.String())
 	}
-	return "ip:" + r.RemoteAddr
+	return fingerprintIdentity("ip", r.RemoteAddr)
+}
+
+func fingerprintIdentity(kind, value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%s:%x", kind, digest[:8])
 }

@@ -150,9 +150,18 @@ confidential. It is intended for short-lived debugging, not routine operation.
   are coalesced and briefly cached to prevent request fan-out amplification.
 - `/_shepard/metrics` exposes process and queue counters in Prometheus format.
 - `/_shepard/usage` reports persisted token totals when providers return usage.
+  The default view is cumulative; `period=day` and `period=month` return
+  client/model aggregates backed by UTC daily buckets.
 
 Health and readiness are separate so an orchestrator can distinguish a live
 process from a process that currently has no usable backend.
+
+Usage accounting stores aggregates rather than individual request events. This
+keeps database growth bounded by days, clients, and models while still allowing
+monthly totals to be computed from daily rows. Clients are represented by a
+pseudonymous fingerprint of the inbound bearer credential, or of the effective
+source IP when authentication is disabled. Raw credentials and IP addresses are
+not stored in the accounting tables.
 
 ## Configuration reload and lifecycle
 

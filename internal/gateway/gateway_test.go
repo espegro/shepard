@@ -83,6 +83,24 @@ func TestChatAliasCredentialPromptAndUsage(t *testing.T) {
 	if got := snapshot.Models["stable"]; got.Requests != 1 || got.TotalTokens != 15 || got.InputTokens != 12 || got.OutputTokens != 3 {
 		t.Fatalf("unexpected usage: %+v", got)
 	}
+
+	periodReq := httptest.NewRequest(http.MethodGet, "/_shepard/usage?period=day", nil)
+	periodReq.Header.Set("Authorization", "Bearer client-secret")
+	periodResp := httptest.NewRecorder()
+	g.ServeHTTP(periodResp, periodReq)
+	var periodSnapshot struct {
+		Period string        `json:"period"`
+		Usage  []PeriodUsage `json:"usage"`
+	}
+	if err := json.NewDecoder(periodResp.Body).Decode(&periodSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	wantClient := fingerprintIdentity("key", "Bearer client-secret")
+	if periodSnapshot.Period != "day" || len(periodSnapshot.Usage) != 1 ||
+		periodSnapshot.Usage[0].Client != wantClient || periodSnapshot.Usage[0].Model != "stable" ||
+		periodSnapshot.Usage[0].TotalTokens != 15 {
+		t.Fatalf("unexpected period usage: %+v", periodSnapshot)
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -330,6 +348,18 @@ func TestForwardedClientIPRequiresTrustedProxy(t *testing.T) {
 	}
 	if got := clientIPString(forwardedClientIP("127.0.0.1:1234", "10.0.0.5", trusted)); got != "10.0.0.5" {
 		t.Fatalf("trusted proxy forwarded IP=%s", got)
+	}
+}
+
+func TestClientIdentityDoesNotContainRawAddressOrCredential(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "192.0.2.10:1234"
+	if got := clientIdentity(request, nil); got != fingerprintIdentity("ip", "192.0.2.10") || strings.Contains(got, "192.0.2.10") {
+		t.Fatalf("unexpected IP identity %q", got)
+	}
+	request.Header.Set("Authorization", "Bearer client-secret")
+	if got := clientIdentity(request, nil); got != fingerprintIdentity("key", "Bearer client-secret") || strings.Contains(got, "client-secret") {
+		t.Fatalf("unexpected key identity %q", got)
 	}
 }
 
@@ -593,7 +623,11 @@ func TestUsagePersistsAcrossStoreRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.record("persistent", http.StatusOK, []byte(`{"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}`))
+	store.record("key:test", "persistent", http.StatusOK, []byte(`{"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}`))
+	// Simulate a database created by a version that only had cumulative usage.
+	if _, err := store.db.Exec(`DROP TABLE daily_usage`); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.close(); err != nil {
 		t.Fatal(err)
 	}
@@ -606,6 +640,60 @@ func TestUsagePersistsAcrossStoreRestart(t *testing.T) {
 	usage := reopened.snapshot()["persistent"]
 	if usage.Requests != 1 || usage.InputTokens != 4 || usage.OutputTokens != 2 || usage.TotalTokens != 6 {
 		t.Fatalf("usage was not persisted: %+v", usage)
+	}
+	daily, err := reopened.periodSnapshot("day", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(daily) != 0 {
+		t.Fatalf("migration invented daily history: %+v", daily)
+	}
+	reopened.record("key:test", "persistent", http.StatusOK, []byte(`{"usage":{"total_tokens":1}}`))
+	daily, err = reopened.periodSnapshot("day", "")
+	if err != nil || len(daily) != 1 || daily[0].TotalTokens != 1 {
+		t.Fatalf("daily accounting did not start after migration: usage=%+v error=%v", daily, err)
+	}
+}
+
+func TestUsageAggregatesByDayMonthClientAndModel(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store, err := newUsageStore(t.TempDir()+"/usage.db", logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.close()
+
+	usage := []byte(`{"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}`)
+	// This is August 22 in UTC even though the local calendar has crossed midnight.
+	store.recordAt(time.Date(2026, time.August, 23, 0, 30, 0, 0, time.FixedZone("CEST", 2*60*60)), "key:alpha", "coding", http.StatusOK, usage)
+	store.recordAt(time.Date(2026, time.August, 23, 1, 0, 0, 0, time.UTC), "key:alpha", "coding", http.StatusBadGateway, nil)
+	store.recordAt(time.Date(2026, time.September, 1, 1, 0, 0, 0, time.UTC), "key:beta", "fast", http.StatusOK, usage)
+
+	days, err := store.periodSnapshot("day", "key:alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(days) != 2 || days[0].Period != "2026-08-22" || days[1].Period != "2026-08-23" ||
+		days[0].TotalTokens != 6 || days[1].Errors != 1 {
+		t.Fatalf("unexpected daily usage: %+v", days)
+	}
+
+	months, err := store.periodSnapshot("month", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(months) != 2 || months[0].Period != "2026-08" || months[0].Requests != 2 ||
+		months[0].Client != "key:alpha" || months[1].Period != "2026-09" || months[1].Client != "key:beta" {
+		t.Fatalf("unexpected monthly usage: %+v", months)
+	}
+}
+
+func TestUsageRejectsUnknownPeriod(t *testing.T) {
+	g := mustGateway(t, testConfig("http://provider.invalid/v1"))
+	response := httptest.NewRecorder()
+	g.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/_shepard/usage?period=week", nil))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", response.Code, response.Body.String())
 	}
 }
 

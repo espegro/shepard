@@ -147,7 +147,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
 		g.models(w, r, cfg)
 	case r.Method == http.MethodGet && r.URL.Path == "/_shepard/usage":
-		writeJSON(w, http.StatusOK, map[string]any{"models": g.usage.snapshot()})
+		g.usageReport(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/_shepard/metrics":
 		g.metrics.writePrometheus(w, g.queue.depth())
 	case r.Method == http.MethodPost && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/responses"):
@@ -232,6 +232,26 @@ func authorized(r *http.Request, keys []string) bool {
 	return false
 }
 
+func (g *Gateway) usageReport(w http.ResponseWriter, r *http.Request) {
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		// Preserve the original response shape for existing consumers.
+		writeJSON(w, http.StatusOK, map[string]any{"models": g.usage.snapshot()})
+		return
+	}
+	if period != "day" && period != "month" {
+		writeAPIError(w, http.StatusBadRequest, `period must be "day" or "month"`)
+		return
+	}
+	items, err := g.usage.periodSnapshot(period, r.URL.Query().Get("client"))
+	if err != nil {
+		g.logger.Error("read period usage", "period", period, "error", err)
+		writeAPIError(w, http.StatusInternalServerError, "could not read usage")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"period": period, "usage": items})
+}
+
 func (g *Gateway) models(w http.ResponseWriter, r *http.Request, cfg *config.Config) {
 	aliases := make([]string, 0, len(cfg.Models))
 	for alias := range cfg.Models {
@@ -278,10 +298,11 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 		ctx, cancel = context.WithTimeout(ctx, cfg.Server.RequestTimeout.Duration)
 		defer cancel()
 	}
+	clientID := clientIdentity(r, g.trusted.Load())
 	// Ingress and client admission happen before reading potentially large input.
 	releaseIngress, admitted, queued := g.admitWithQueue(ctx, cfg.Server.Queue.WaitTimeout.Duration,
 		admissionScope{key: "ingress", limits: config.Limits{MaxConcurrent: cfg.Server.MaxConcurrentRequests}},
-		admissionScope{key: "client:" + clientIdentity(r, g.trusted.Load()), limits: cfg.Server.ClientLimits},
+		admissionScope{key: "client:" + clientID, limits: cfg.Server.ClientLimits},
 	)
 	if queued {
 		g.metrics.queueWaits.Add(1)
@@ -333,7 +354,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 	}
 	if !admitted {
 		g.metrics.queueRejected.Add(1)
-		g.usage.record(alias, http.StatusTooManyRequests, nil)
+		g.usage.record(clientID, alias, http.StatusTooManyRequests, nil)
 		writeRateLimitError(w)
 		return
 	}
@@ -453,7 +474,7 @@ targetLoop:
 			message = "all provider targets are rate limited"
 			w.Header().Set("Retry-After", "1")
 		}
-		g.usage.record(alias, status, nil)
+		g.usage.record(clientID, alias, status, nil)
 		writeAPIError(w, status, message)
 		return
 	}
@@ -485,7 +506,7 @@ targetLoop:
 		destination = flushWriter{writer: w, controller: controller, writeIdleTimeout: cfg.Server.WriteIdleTimeout.Duration}
 	}
 	_, copyErr := io.Copy(destination, responseReader)
-	g.usage.record(alias, resp.StatusCode, capture.Bytes())
+	g.usage.record(clientID, alias, resp.StatusCode, capture.Bytes())
 	g.logResponse(&logCfg, resp, selected.Provider, selected.Model, responseLog)
 	g.logger.Info("request complete", "model", alias, "provider", selected.Provider, "upstream_model", selected.Model, "status", resp.StatusCode, "duration_ms", time.Since(started).Milliseconds(), "remote_addr", r.RemoteAddr, "client_addr", clientIPString(forwardedClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), g.trusted.Load())), "x_forwarded_for", r.Header.Get("X-Forwarded-For"))
 	if copyErr != nil {

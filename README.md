@@ -147,7 +147,9 @@ layer as defense in depth.
 - `POST /v1/responses` (including streaming)
 - `GET /v1/models` lists static aliases and prefixed discovered models
 - `GET /opencode.json` returns an OpenCode-compatible config for this gateway
-- `GET /_shepard/usage` reports process-local token totals returned by providers
+- `GET /_shepard/usage` reports cumulative token totals returned by providers
+- `GET /_shepard/usage?period=day` reports UTC daily totals per client and model
+- `GET /_shepard/usage?period=month` reports monthly totals per client and model
 - `GET /_shepard/metrics` exposes Prometheus-compatible process metrics
 - `GET /healthz` is intentionally unauthenticated
 - `GET /readyz` checks whether at least one provider is reachable; checks are
@@ -167,6 +169,15 @@ enabled, configure the corresponding Shepard key in OpenCode separately.
 Usage is stored in the SQLite file configured by `server.usage_db` and survives
 restarts. The database path requires a process restart if changed; other settings
 can still be reloaded with `SIGHUP`.
+
+Daily accounting uses a stable, pseudonymous client fingerprint. Authenticated
+requests are grouped by a fingerprint of the inbound bearer credential; requests
+without a credential are grouped by a fingerprint of their effective client IP.
+Neither the credential nor the raw IP address is stored in the accounting table.
+Use the optional `client` query parameter to select one fingerprint, for example
+`/_shepard/usage?period=month&client=key:0123456789abcdef`. Existing databases
+retain their cumulative totals; daily history starts when a version with daily
+accounting first records a request.
 
 ## Multiple backends and credentials
 

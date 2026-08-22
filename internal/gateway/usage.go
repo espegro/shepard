@@ -23,6 +23,18 @@ type Usage struct {
 	LastUpstreamCode int       `json:"last_upstream_status,omitempty"`
 }
 
+// PeriodUsage is an aggregate for one client and model in a UTC day or month.
+type PeriodUsage struct {
+	Period       string `json:"period"`
+	Client       string `json:"client"`
+	Model        string `json:"model"`
+	Requests     uint64 `json:"requests"`
+	Errors       uint64 `json:"errors"`
+	InputTokens  uint64 `json:"input_tokens"`
+	OutputTokens uint64 `json:"output_tokens"`
+	TotalTokens  uint64 `json:"total_tokens"`
+}
+
 type usageStore struct {
 	db     *sql.DB
 	logger *slog.Logger
@@ -54,6 +66,19 @@ func newUsageStore(path string, logger *slog.Logger) (*usageStore, error) {
 			last_request_at INTEGER NOT NULL,
 			last_upstream_status INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS daily_usage (
+			day TEXT NOT NULL,
+			client TEXT NOT NULL,
+			model TEXT NOT NULL,
+			requests INTEGER NOT NULL,
+			errors INTEGER NOT NULL,
+			input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL,
+			total_tokens INTEGER NOT NULL,
+			PRIMARY KEY (day, client, model)
+		)`,
+		`CREATE INDEX IF NOT EXISTS daily_usage_client_day
+			ON daily_usage (client, day)`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			_ = db.Close()
@@ -65,7 +90,11 @@ func newUsageStore(path string, logger *slog.Logger) (*usageStore, error) {
 
 func (s *usageStore) close() error { return s.db.Close() }
 
-func (s *usageStore) record(model string, status int, body []byte) {
+func (s *usageStore) record(client, model string, status int, body []byte) {
+	s.recordAt(time.Now().UTC(), client, model, status, body)
+}
+
+func (s *usageStore) recordAt(recordedAt time.Time, client, model string, status int, body []byte) {
 	in, out, total := extractUsage(body)
 	errorIncrement := 0
 	if status >= 400 {
@@ -73,7 +102,14 @@ func (s *usageStore) record(model string, status int, body []byte) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		s.logger.Error("begin usage update", "model", model, "error", err)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO model_usage (
 			model, requests, errors, input_tokens, output_tokens, total_tokens,
 			last_request_at, last_upstream_status
@@ -86,9 +122,29 @@ func (s *usageStore) record(model string, status int, body []byte) {
 			total_tokens = total_tokens + excluded.total_tokens,
 			last_request_at = excluded.last_request_at,
 			last_upstream_status = excluded.last_upstream_status`,
-		model, errorIncrement, in, out, total, time.Now().UTC().UnixNano(), status)
+		model, errorIncrement, in, out, total, recordedAt.UTC().UnixNano(), status)
 	if err != nil {
 		s.logger.Error("persist usage", "model", model, "error", err)
+		return
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO daily_usage (
+			day, client, model, requests, errors, input_tokens, output_tokens,
+			total_tokens
+		) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+		ON CONFLICT(day, client, model) DO UPDATE SET
+			requests = requests + 1,
+			errors = errors + excluded.errors,
+			input_tokens = input_tokens + excluded.input_tokens,
+			output_tokens = output_tokens + excluded.output_tokens,
+			total_tokens = total_tokens + excluded.total_tokens`,
+		recordedAt.UTC().Format(time.DateOnly), client, model, errorIncrement, in, out, total)
+	if err != nil {
+		s.logger.Error("persist daily usage", "client", client, "model", model, "error", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		s.logger.Error("commit usage update", "client", client, "model", model, "error", err)
 	}
 }
 
@@ -121,6 +177,52 @@ func (s *usageStore) snapshot() map[string]Usage {
 		s.logger.Error("iterate usage", "error", err)
 	}
 	return result
+}
+
+func (s *usageStore) periodSnapshot(period, client string) ([]PeriodUsage, error) {
+	var periodExpression string
+	switch period {
+	case "day":
+		periodExpression = "day"
+	case "month":
+		periodExpression = "substr(day, 1, 7)"
+	default:
+		return nil, fmt.Errorf("unsupported usage period %q", period)
+	}
+
+	query := `SELECT ` + periodExpression + ` AS period, client, model,
+		       SUM(requests), SUM(errors), SUM(input_tokens),
+		       SUM(output_tokens), SUM(total_tokens)
+		FROM daily_usage`
+	var args []any
+	if client != "" {
+		query += ` WHERE client = ?`
+		args = append(args, client)
+	}
+	query += ` GROUP BY ` + periodExpression + `, client, model
+		ORDER BY period, client, model`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]PeriodUsage, 0)
+	for rows.Next() {
+		var item PeriodUsage
+		if err := rows.Scan(&item.Period, &item.Client, &item.Model, &item.Requests,
+			&item.Errors, &item.InputTokens, &item.OutputTokens, &item.TotalTokens); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func extractUsage(body []byte) (uint64, uint64, uint64) {
