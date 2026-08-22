@@ -8,6 +8,8 @@ import (
 )
 
 type metrics struct {
+	// These counters cover the lifetime of the process and are updated directly
+	// on request paths, so atomics keep collection independent of a registry lock.
 	requests         atomic.Uint64
 	completed        atomic.Uint64
 	failed           atomic.Uint64

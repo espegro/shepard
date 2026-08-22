@@ -23,6 +23,8 @@ import (
 
 const usageCaptureLimit = 2 << 20
 
+// Gateway is the composition root for request routing and its shared runtime
+// state. A single instance is safe for concurrent use as an http.Handler.
 type Gateway struct {
 	config      atomic.Pointer[config.Config]
 	client      *http.Client
@@ -76,6 +78,8 @@ func New(cfg *config.Config, logger *slog.Logger) (*Gateway, error) {
 }
 
 func (g *Gateway) Reload(cfg *config.Config) error {
+	// The database owns process-lifetime resources and cannot be atomically
+	// replaced with the rest of the in-memory configuration.
 	if cfg.Server.UsageDB != g.usageDBPath {
 		return errors.New("usage_db cannot be changed by reload; restart Shepard")
 	}
@@ -87,6 +91,8 @@ func (g *Gateway) Reload(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	// Each request loads this pointer once, so active requests keep a consistent
+	// snapshot while new requests immediately see the replacement.
 	g.config.Store(cfg)
 	g.acl.Store(acl)
 	if len(cfg.Server.TrustedProxyNetworks) > 0 {
@@ -116,6 +122,7 @@ func (g *Gateway) admitWithQueue(ctx context.Context, timeout time.Duration, sco
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := g.config.Load()
 	clientIP := forwardedClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), g.trusted.Load())
+	// Apply the network boundary before authentication and before reading a body.
 	if acl := g.acl.Load(); acl != nil && !acl.contains(clientIP) {
 		g.logger.Warn("client rejected by network ACL", "remote_addr", r.RemoteAddr, "client_addr", clientIPString(clientIP), "x_forwarded_for", r.Header.Get("X-Forwarded-For"))
 		writeAPIError(w, http.StatusForbidden, "client network is not allowed")
@@ -271,6 +278,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 		ctx, cancel = context.WithTimeout(ctx, cfg.Server.RequestTimeout.Duration)
 		defer cancel()
 	}
+	// Ingress and client admission happen before reading potentially large input.
 	releaseIngress, admitted, queued := g.admitWithQueue(ctx, cfg.Server.Queue.WaitTimeout.Duration,
 		admissionScope{key: "ingress", limits: config.Limits{MaxConcurrent: cfg.Server.MaxConcurrentRequests}},
 		admissionScope{key: "client:" + clientIdentity(r, g.trusted.Load()), limits: cfg.Server.ClientLimits},
@@ -304,6 +312,8 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 	g.logRequest(&logCfg, r, alias, body)
 	model, ok := cfg.Models[alias]
 	if !ok {
+		// Discovery is deliberately lazy: an unavailable discovery provider does
+		// not prevent startup or use of statically configured aliases.
 		model, ok, err = g.resolveDiscoveredModel(ctx, cfg, alias)
 		if err != nil {
 			g.logger.Error("model autodiscovery failed", "model", alias, "error", err)
@@ -334,6 +344,8 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, cfg *config.Conf
 		return
 	}
 	applyRequestOverrides(payload, model.Overrides)
+	// Targets are ordered by operator preference. Retry stays within a target;
+	// failover advances to the next target before anything reaches the client.
 	var resp *http.Response
 	var selected config.TargetConfig
 	var releaseProvider func()
@@ -354,6 +366,8 @@ targetLoop:
 			return
 		}
 		for attempt := 0; attempt <= model.Retries; attempt++ {
+			// Provider admission is per attempt so capacity is released during
+			// backoff and while another target is being considered.
 			providerRelease, allowed, queued := g.admitWithQueue(ctx, cfg.Server.Queue.WaitTimeout.Duration, admissionScope{
 				key: "provider:" + candidate.Provider, limits: provider.Limits,
 			})
@@ -399,6 +413,8 @@ targetLoop:
 
 			retryable := retryableStatus(candidateResp.StatusCode)
 			hasAnotherTarget := targetIndex < len(targets)-1
+			// A missing model or provider throttling is more likely to improve by
+			// changing target than by immediately repeating the same request.
 			shouldRetrySame := retryable && candidateResp.StatusCode != http.StatusTooManyRequests && candidateResp.StatusCode != http.StatusNotFound && attempt < model.Retries
 			shouldFailover := retryable && !shouldRetrySame && hasAnotherTarget
 			if shouldRetrySame || shouldFailover {
@@ -448,6 +464,8 @@ targetLoop:
 	defer resp.Body.Close()
 	g.metrics.completed.Add(1)
 	completed = true
+	// Once headers are committed, retry and failover are no longer safe: doing
+	// so could splice two different generated responses into one stream.
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	capture := &tailBuffer{limit: usageCaptureLimit}
@@ -476,6 +494,8 @@ targetLoop:
 }
 
 func applyRequestOverrides(payload map[string]any, overrides map[string]any) {
+	// Configuration is policy and intentionally wins over client-supplied fields.
+	// Structural fields are rejected during configuration validation.
 	for key, value := range overrides {
 		payload[key] = value
 	}
@@ -588,6 +608,8 @@ func discoveryContext(parent context.Context, cfg *config.Config) (context.Conte
 }
 
 func applyProviderHeaders(header http.Header, provider config.ProviderConfig) error {
+	// Inbound credentials are never reused upstream. Provider secrets stay out
+	// of the config file and are applied only to provider-bound requests.
 	if provider.APIKeyEnv != "" {
 		key := os.Getenv(provider.APIKeyEnv)
 		if key == "" {
@@ -608,6 +630,8 @@ func upstreamURL(base string, incoming *url.URL) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Provider base URLs normally already end in /v1, so append only the API
+	// operation (for example "chat/completions") from the incoming route.
 	rel := strings.TrimPrefix(incoming.Path, "/v1/")
 	u.Path = path.Join(strings.TrimSuffix(u.Path, "/"), rel)
 	u.RawQuery = incoming.RawQuery
@@ -716,6 +740,8 @@ type tailBuffer struct {
 }
 
 func (b *tailBuffer) Write(p []byte) (int, error) {
+	// Usage commonly appears at the end of a streamed response. Keeping only a
+	// bounded tail avoids buffering the full generated output in memory.
 	original := len(p)
 	if len(p) >= b.limit {
 		b.buf = append(b.buf[:0], p[len(p)-b.limit:]...)

@@ -101,6 +101,8 @@ func (g *Gateway) resolveDiscoveredModel(ctx context.Context, cfg *config.Config
 }
 
 func (g *Gateway) discoverProvider(ctx context.Context, name string, provider config.ProviderConfig) ([]discoveredModel, error) {
+	// Cache only successful results. Failures remain retryable on the next
+	// request instead of hiding an upstream recovery for the full TTL.
 	if models, ok := g.discovery.get(name); ok {
 		return models, nil
 	}
@@ -144,6 +146,8 @@ func (g *Gateway) discoverProvider(ctx context.Context, name string, provider co
 			continue
 		}
 		models = append(models, discoveredModel{
+			// Namespacing prevents providers with identical model IDs from
+			// colliding in Shepard's client-facing model list.
 			Alias:    provider.Autodiscover.Prefix + item.ID,
 			Model:    item.ID,
 			Provider: name,

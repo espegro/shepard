@@ -65,10 +65,14 @@ func parseRemoteIP(remoteAddr string) net.IP {
 
 func forwardedClientIP(remoteAddr string, forwarded string, trusted *clientACL) net.IP {
 	peer := parseRemoteIP(remoteAddr)
+	// Forwarded headers are attacker-controlled unless the direct peer is a
+	// proxy explicitly trusted by the operator.
 	if trusted == nil || !trusted.contains(peer) {
 		return peer
 	}
 	parts := strings.Split(forwarded, ",")
+	// Walk from the nearest hop backwards and stop at the first untrusted
+	// address. That address is the effective client at the trust boundary.
 	for i := len(parts) - 1; i >= 0; i-- {
 		candidate := net.ParseIP(strings.TrimSpace(parts[i]))
 		if candidate == nil {

@@ -38,6 +38,8 @@ func newUsageStore(path string, logger *slog.Logger) (*usageStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Usage writes are small and serialized. A single connection avoids SQLite
+	// writer contention and gives updates a predictable order.
 	db.SetMaxOpenConns(1)
 	for _, statement := range []string{
 		"PRAGMA journal_mode=WAL",
@@ -122,6 +124,8 @@ func (s *usageStore) snapshot() map[string]Usage {
 }
 
 func extractUsage(body []byte) (uint64, uint64, uint64) {
+	// Support both regular JSON responses and OpenAI-style SSE, where the final
+	// data event commonly contains the authoritative usage object.
 	var best struct {
 		PromptTokens     uint64 `json:"prompt_tokens"`
 		CompletionTokens uint64 `json:"completion_tokens"`

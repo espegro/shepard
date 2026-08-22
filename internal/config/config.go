@@ -24,6 +24,8 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
+// Config separates listener policy, upstream connections, and client-facing
+// model aliases so providers can change without changing client configuration.
 type Config struct {
 	Server    ServerConfig              `yaml:"server"`
 	Providers map[string]ProviderConfig `yaml:"providers"`
@@ -103,6 +105,7 @@ type Limits struct {
 }
 
 func (m ModelConfig) ResolvedTargets() []TargetConfig {
+	// provider/model is the compact form for the common single-target case.
 	if len(m.Targets) > 0 {
 		return m.Targets
 	}
@@ -116,6 +119,7 @@ func Load(path string) (*Config, error) {
 	}
 	var cfg Config
 	decoder := yaml.NewDecoder(bytes.NewReader(b))
+	// Reject misspelled settings rather than silently running with defaults.
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
 		return nil, err
@@ -128,6 +132,8 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) defaults() {
+	// Defaults are applied before validation so validation sees the exact
+	// configuration that the gateway will use.
 	if c.Server.Listen == "" {
 		c.Server.Listen = ":8080"
 	}

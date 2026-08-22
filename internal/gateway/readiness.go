@@ -30,6 +30,7 @@ func (c *readinessCache) clear() {
 	c.mu.Lock()
 	c.result = readinessResult{}
 	c.expires = time.Time{}
+	// Invalidate a probe already in flight as well as a completed cached result.
 	c.generation++
 	c.mu.Unlock()
 }
@@ -58,6 +59,8 @@ func (g *Gateway) cachedReadiness(ctx context.Context, cfg *config.Config) (read
 			return result, true
 		}
 		if inflight := g.readiness.inflight; inflight != nil {
+			// Coalesce concurrent probes so health polling cannot amplify into a
+			// burst of requests to every provider.
 			g.readiness.mu.Unlock()
 			select {
 			case <-ctx.Done():
@@ -103,6 +106,8 @@ func (g *Gateway) checkReadiness(cfg *config.Config) readinessResult {
 		ok   bool
 	}
 	results := make(chan result, len(names))
+	// Probe providers concurrently; readiness requires any usable backend, not
+	// every configured backend.
 	for _, name := range names {
 		go func(name string) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

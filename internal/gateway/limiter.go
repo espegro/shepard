@@ -35,11 +35,15 @@ func newLimitStore() *limitStore {
 
 func (s *limitStore) clear() {
 	s.mu.Lock()
+	// Keep active concurrency reservations: their release closures still refer
+	// to this map. Only rate history is configuration-dependent and reset here.
 	s.buckets = make(map[string]bucketState)
 	s.mu.Unlock()
 }
 
 func (s *limitStore) admit(scopes ...admissionScope) (func(), bool) {
+	// Check all scopes under one lock before consuming anything. This makes a
+	// multi-scope admission (for example ingress + client) all-or-nothing.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -78,6 +82,8 @@ func (s *limitStore) admit(scopes ...admissionScope) (func(), bool) {
 			s.concurrent[scope.key]++
 		}
 	}
+	// Callers hold concurrency capacity until this release function is invoked
+	// exactly once, normally through defer.
 	return func() {
 		s.mu.Lock()
 		for _, scope := range scopes {
@@ -94,6 +100,7 @@ func (s *limitStore) admit(scopes ...admissionScope) (func(), bool) {
 
 func clientIdentity(r *http.Request, trusted *clientACL) string {
 	if auth := r.Header.Get("Authorization"); auth != "" {
+		// Group requests by credential without retaining the credential itself.
 		digest := sha256.Sum256([]byte(auth))
 		return fmt.Sprintf("key:%x", digest[:8])
 	}

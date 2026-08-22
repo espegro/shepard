@@ -50,6 +50,8 @@ func main() {
 	signal.Notify(reload, syscall.SIGHUP)
 	go func() {
 		for range reload {
+			// Parse and validate the complete replacement before publishing it.
+			// A failed reload therefore leaves the running gateway untouched.
 			next, err := config.Load(*configPath)
 			if err != nil {
 				logger.Error("reload configuration", "error", err)
@@ -68,6 +70,7 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-stop
+		// Give in-flight streams a bounded window to finish cleanly.
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {

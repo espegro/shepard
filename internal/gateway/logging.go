@@ -17,6 +17,7 @@ var sensitiveHeaders = map[string]struct{}{
 }
 
 func loggedHeaders(header http.Header) map[string]string {
+	// Redact a copy so logging can never mutate headers used by the request.
 	result := make(map[string]string, len(header))
 	for name, values := range header {
 		value := strings.Join(values, ", ")
@@ -72,6 +73,8 @@ type logBodyBuffer struct {
 func newLogBodyBuffer(limit int64) *logBodyBuffer { return &logBodyBuffer{limit: limit} }
 
 func (b *logBodyBuffer) Write(p []byte) (int, error) {
+	// Report the full input as consumed even when only a bounded prefix is kept;
+	// this lets the buffer sit transparently behind io.TeeReader.
 	if b.limit <= 0 {
 		b.truncated = true
 		return len(p), nil
